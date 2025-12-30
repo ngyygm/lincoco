@@ -59,13 +59,14 @@ def split_sentences(text: str) -> List[str]:
     return [s.strip() for s in sentences if s.strip()]
 
 
-def get_complete_sentences(buffer: str, is_first_sentence: bool = False) -> Tuple[List[str], str]:
+def get_complete_sentences(buffer: str, is_first_sentence: bool = False, comma_delay_chars: int = 5) -> Tuple[List[str], str]:
     """
     从缓冲区中提取完整的句子
     
     Args:
         buffer: 文本缓冲区
         is_first_sentence: 是否是首句（首句支持逗号切分，后续句子只支持完整句子）
+        comma_delay_chars: 首句逗号延迟字符数，遇到逗号后等待此数量的字符，如果期间出现句号等结束符则按结束符切分，否则按逗号切分
         
     Returns:
         (完整句子列表, 剩余的不完整文本)
@@ -93,18 +94,37 @@ def get_complete_sentences(buffer: str, is_first_sentence: bool = False) -> Tupl
             sentences = [s for s in sentences if s.strip()]  # 再次过滤空字符串
         return sentences, remaining
     elif is_first_sentence and comma_match:
-        # 只有首句支持按逗号切分
-        # 没有句子结束符，但有逗号，按逗号切分
-        last_comma = comma_match[-1].end()
-        complete_text = buffer[:last_comma]
-        remaining = buffer[last_comma:]
-        # 按逗号分割
-        sentences = re.split(r'(?<=[，,])\s*', complete_text)
-        sentences = [s.strip() for s in sentences if s.strip()]
-        # 删除首句切分后句子末尾的逗号
-        sentences = [remove_trailing_comma(s) for s in sentences]
-        sentences = [s for s in sentences if s.strip()]  # 再次过滤空字符串
-        return sentences, remaining
+        # 只有首句支持按逗号切分，并且支持延迟判断
+        # 找到第一个逗号
+        first_comma = comma_match[0]
+        comma_pos = first_comma.end()  # 逗号后的位置
+        
+        # 检查逗号后的内容长度是否足够延迟字符数
+        chars_after_comma = len(buffer) - comma_pos
+        
+        if chars_after_comma >= comma_delay_chars:
+            # 逗号后已经有足够的字符，检查延迟范围内是否有句子结束符
+            check_range = buffer[comma_pos:comma_pos + comma_delay_chars]
+            end_in_range = list(re.finditer(end_pattern, check_range))
+            
+            if end_in_range:
+                # 在延迟范围内找到了句子结束符，不按逗号切分，等待按句子结束符切分
+                # 这种情况应该等待更多内容，让下次调用时通过上面的end_match分支处理
+                return [], buffer
+            else:
+                # 延迟范围内没有句子结束符，按逗号切分
+                complete_text = buffer[:comma_pos]
+                remaining = buffer[comma_pos:]
+                # 按逗号分割
+                sentences = re.split(r'(?<=[，,])\s*', complete_text)
+                sentences = [s.strip() for s in sentences if s.strip()]
+                # 删除首句切分后句子末尾的逗号
+                sentences = [remove_trailing_comma(s) for s in sentences]
+                sentences = [s for s in sentences if s.strip()]  # 再次过滤空字符串
+                return sentences, remaining
+        else:
+            # 逗号后的内容还不够延迟字符数，等待更多内容
+            return [], buffer
     # 后续句子没有句子结束符时，不切分，等待完整句子
     return [], buffer
 
@@ -336,6 +356,7 @@ class LLMStreamGenerator:
         self.sentence_length_increment_rate = config.get("llm.sentence_length_increment_rate", 1.5)
         self.max_sentence_length = config.get("llm.max_sentence_length", 200)
         self.if_thinking = config.get("llm.if_thinking", False)
+        self.first_sentence_comma_delay_chars = config.get("llm.first_sentence_comma_delay_chars", 5)
         
         # 使用传入的persona_manager，如果没有则创建新实例（向后兼容）
         if persona_manager is not None:
@@ -892,7 +913,7 @@ class LLMStreamGenerator:
                         if filtered_content:
                             # 判断是否是首句（sentence_count == 0 表示还没有发送过任何句子）
                             is_first = (sentence_count == 0)
-                            sentences, buffer = get_complete_sentences(buffer, is_first_sentence=is_first)
+                            sentences, buffer = get_complete_sentences(buffer, is_first_sentence=is_first, comma_delay_chars=self.first_sentence_comma_delay_chars)
                             for sentence in sentences:
                                 if sentence.strip():
                                     # 将句子加入累积缓冲区
@@ -931,7 +952,7 @@ class LLMStreamGenerator:
                             if filtered_content:
                                 # 判断是否是首句（sentence_count == 0 表示还没有发送过任何句子）
                                 is_first = (sentence_count == 0)
-                                sentences, buffer = get_complete_sentences(buffer, is_first_sentence=is_first)
+                                sentences, buffer = get_complete_sentences(buffer, is_first_sentence=is_first, comma_delay_chars=self.first_sentence_comma_delay_chars)
                                 for sentence in sentences:
                                     if sentence.strip():
                                         # 将句子加入累积缓冲区

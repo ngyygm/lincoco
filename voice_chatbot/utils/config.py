@@ -81,6 +81,7 @@ class Config:
             "min_sentence_length": 5,  # 最小句子长度（字符数或单词数，根据语言类型），用于流式句子合并
             "sentence_length_increment_rate": 3,  # 句子长度增量倍率，用于动态调整后续句子的最小长度
             "max_sentence_length": 200,  # 最大句子长度（字符数或单词数，根据语言类型），防止句子无限增长
+            "first_sentence_comma_delay_chars": 5,  # 首句逗号延迟字符数，遇到逗号后等待此数量的字符，如果期间出现句号等结束符则按结束符切分，否则按逗号切分
             "system_prompt": "你叫林可可，是16岁的女高中生，性格活泼开朗，谈吐风趣。你正在和用户聊天，回答简短，控制在300字以内，不要用表情。",  # 系统提示词，定义AI助手的角色和对话风格（保留作为向后兼容的fallback）
             "persona_name": "lincoco",  # 默认人设名称（对应llm/personas/目录下的文件名，不含扩展名）
             "persona_dir": "llm/personas",  # 人设文件目录（相对于项目根目录）
@@ -96,10 +97,11 @@ class Config:
             "min_silence_len": 30,  # 最小静音长度（毫秒）
             "enable_trim_silence": True,  # 是否裁剪静音
             "trim_keep_start": 20,  # 裁剪时开头固定保留长度（毫秒）
-            "trim_keep_end": 300,  # 裁剪时结尾固定保留长度（毫秒）
+            "trim_keep_end": 350,  # 裁剪时结尾固定保留长度（毫秒）
+            "enable_normalize_loudness": True,  # 是否启用响度归一化（统一音频响度，在裁剪静音之后应用）
             "playback_check_interval": 0.05,  # 播放检查间隔（秒）
             "playback_status_update_interval": 0.1,  # 播放状态更新间隔（秒），用于流式状态返回
-            "default_engine": "edgetts",  # 当前使用的TTS引擎（edgetts 或 cosyvoice3）
+            "default_engine": "melotts",  # 当前使用的TTS引擎（edgetts、cosyvoice3 或 melotts）
             # TTS缓存配置（所有引擎共享）
             "cache_enabled": True,  # 是否启用TTS内存缓存（减少重复请求）
             "cache_max_size": None,  # 最大缓存条目数（None表示不设上限，不淘汰旧缓存）
@@ -111,6 +113,7 @@ class Config:
             # TTS引擎配置
             "engines": {
                 "edge_tts": {  # EdgeTTS引擎配置
+                    "is_streaming": False,  # 是否流式引擎（False=非流式）
                     "voice_map": {  # 语言-语音映射表
                         # "ja": "ja-JP-NanamiNeural",
                         "ja": "zh-CN-XiaoyiNeural",
@@ -125,6 +128,7 @@ class Config:
                     "enable_session_reuse": True,  # 是否启用会话复用（减少连接开销）
                 },
                 "cosyvoice3": {  # CosyVoice3引擎配置
+                    "is_streaming": True,  # 是否流式引擎（True=流式）
                     "model_path": "D:\\APP\\models\\Qwen\\Fun-CosyVoice3-0.5B-2512",  # CosyVoice3模型路径（必须配置）
                     "reference_audio_path": "",  # 零样本克隆参考音频路径（可选）
                     "prompt_text": "",  # 零样本克隆提示文本（可选）
@@ -142,6 +146,28 @@ class Config:
                         "ko": "韩语女",
                         "yue": "粤语女",
                     },
+                },
+                "melo_tts": {  # MeloTTS引擎配置
+                    "is_streaming": False,  # 是否流式引擎（False=非流式）
+                    "api_url": "http://127.0.0.1:8101",  # MeloTTS API 服务地址
+                    "api_endpoint": "/tts",  # API 端点路径
+                    "init_endpoint": "/init",  # 模型初始化端点路径
+                    "timeout": 30.0,  # HTTP 请求超时时间（秒）
+                    "model_language": "ZH",  # 要加载的模型语言（ZH=中文, EN=英文, JP=日文等），启动时会调用 /init 接口加载此语言的模型
+                    "speaker_name_map": {  # 语言到说话人名称的映射（推荐使用，与 WebUI 一致，优先级高于 speaker_id_map）
+                        "zh": "ZH",  # 中文使用 'ZH' 说话人
+                        "en": "EN-US",  # 英文使用 'EN-US' 说话人（可根据模型调整）
+                    },
+                    "speaker_id_map": {  # 语言到 speaker_id 的映射（已废弃，推荐使用 speaker_name_map）
+                        "zh": 0,
+                        "en": 0,
+                    },
+                    "default_speaker_id": 0,  # 默认 speaker_id（已废弃，推荐使用 default_speaker_name）
+                    "default_speaker_name": None,  # 默认说话人名称（如 'ZH'，如果不提供则使用模型默认的第一个说话人）
+                    "sdp_ratio": 0.2,  # SDP 比例（默认值）
+                    "noise_scale": 0.6,  # 噪声比例（默认值）
+                    "noise_scale_w": 0.8,  # 噪声宽度比例（默认值）
+                    "speed": 1.0,  # 语速（默认值，1.0为正常速度）
                 },
             },
         },

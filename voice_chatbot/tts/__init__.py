@@ -15,10 +15,20 @@ except ImportError:
     CosyVoice3Engine = None
     HAS_COSYVOICE3 = False
 
+# MeloTTS引擎（可选，需要MeloTTS API服务）
+try:
+    from .melo_tts_engine import MeloTTSEngine
+    HAS_MELOTTS = True
+except ImportError:
+    MeloTTSEngine = None
+    HAS_MELOTTS = False
+
 __all__ = [
     'EdgeTTSEngine',
     'CosyVoice3Engine',
     'HAS_COSYVOICE3',
+    'MeloTTSEngine',
+    'HAS_MELOTTS',
     'AudioPlayer',
     'PlaybackStatus',
     'InterruptReason',

@@ -134,6 +134,7 @@ class EdgeTTSEngine:
         self.enable_trim_silence = config.get("tts.enable_trim_silence", True)
         self.trim_keep_start = config.get("tts.trim_keep_start", 20)  # 裁剪时开头固定保留长度（毫秒）
         self.trim_keep_end = config.get("tts.trim_keep_end", 300)  # 裁剪时结尾固定保留长度（毫秒）
+        self.enable_normalize_loudness = config.get("tts.enable_normalize_loudness", True)  # 是否启用响度归一化
         
         # 语音映射表（可从配置覆盖，优先使用新的配置路径，保持向后兼容）
         self.voice_map = config.get("tts.engines.edge_tts.voice_map") or config.get("tts.voice_map", self.DEFAULT_VOICE_MAP.copy())
@@ -190,8 +191,9 @@ class EdgeTTSEngine:
                     def generate_for_cache(text: str, voice: str) -> Optional[AudioSegment]:
                         """用于缓存修复的生成函数"""
                         try:
-                            # 使用同步方法生成音频（简化版，不裁剪静音）
-                            return self.generate(text, voice=voice, trim_silence=False, task_id=None)
+                            # 使用同步方法生成音频，使用配置的默认值（trim_silence=None会使用配置值）
+                            # 这样缓存的文件会和应用相同的处理（裁剪静音+归一化），保持一致性
+                            return self.generate(text, voice=voice, trim_silence=None, task_id=None)
                         except Exception as e:
                             self._publish_log("ERROR", f"修复缓存时生成音频失败 {voice}/{text[:30]}...: {e}", indent=2)
                             return None
@@ -489,6 +491,26 @@ class EdgeTTSEngine:
             except:
                 return None, 0
     
+    def _normalize_loudness(self, audio: AudioSegment) -> AudioSegment:
+        """
+        归一化音频响度（峰值归一化）
+        
+        Args:
+            audio: 输入音频（AudioSegment）
+            
+        Returns:
+            归一化后的音频（AudioSegment）
+        """
+        try:
+            # 使用pydub的normalize方法进行峰值归一化
+            # normalize()会将音频的最大峰值调整到0dBFS（最大音量），避免削波
+            normalized = audio.normalize()
+            log_debug("TTS", "已应用响度归一化", indent=2)
+            return normalized
+        except Exception as e:
+            log_warn("TTS", f"响度归一化失败: {e}，返回原始音频", indent=1)
+            return audio
+    
     def _check_task_cancelled(self, task_id: Optional[int]) -> bool:
         """
         检查任务是否被取消
@@ -671,6 +693,10 @@ class EdgeTTSEngine:
                 processing_time = time.time() - processing_start_time
                 tts_total_elapsed = time.time() - tts_start_time
                 
+                # 响度归一化（在裁剪静音之后应用）
+                if self.enable_normalize_loudness and audio_segment:
+                    audio_segment = self._normalize_loudness(audio_segment)
+                
                 if trimmed_ms > 0:
                     self._publish_log("DEBUG", f"生成完成 [总耗时: {tts_total_elapsed*1000:.1f}ms, 生成: {tts_generation_time*1000:.1f}ms, 处理: {processing_time*1000:.1f}ms，裁剪静音{trimmed_ms}ms]", indent=1)
                 else:
@@ -703,6 +729,11 @@ class EdgeTTSEngine:
             else:
                 # 不裁剪静音，直接返回AudioSegment
                 audio_segment = AudioSegment.from_mp3(io.BytesIO(audio_bytes))
+                
+                # 响度归一化（即使不裁剪静音也应用归一化）
+                if self.enable_normalize_loudness and audio_segment:
+                    audio_segment = self._normalize_loudness(audio_segment)
+                
                 tts_total_elapsed = time.time() - tts_start_time
                 self._publish_log("DEBUG", f"生成完成 [总耗时: {tts_total_elapsed*1000:.1f}ms, 生成: {tts_generation_time*1000:.1f}ms]", indent=1)
                 

@@ -1,5 +1,147 @@
 # 开发日志
 
+## 2025-12-31 02:18 - TTS引擎增强和首句切分优化
+
+### 实现内容
+
+完成了多项TTS相关功能增强和LLM首句切分逻辑优化，包括新增MeloTTS引擎、响度处理、流式/非流式统一接口，以及首句逗号延迟判断功能。
+
+#### 核心功能
+
+1. **MeloTTS引擎实现** (`voice_chatbot/tts/melo_tts_engine.py`) ✅
+   - 新增MeloTTS引擎支持，通过HTTP API调用MeloTTS服务
+   - 支持多语言语音选择（通过speaker_name_map配置）
+   - 支持自动语言检测和说话人选择
+   - 支持语速、SDP比例、噪声比例等参数配置
+   - 实现LRU内存缓存机制，减少重复请求
+   - 支持文件缓存，持久化保存TTS音频
+   - 支持HTTP会话复用，提高性能
+   - 支持模型初始化（通过/init接口加载指定语言的模型）
+
+2. **TTS响度归一化处理** ✅
+   - 在所有TTS引擎中添加响度归一化功能
+   - 使用pydub的normalize()方法进行峰值归一化
+   - 确保音频响度一致性，避免削波
+   - 通过配置项 `tts.enable_normalize_loudness` 控制是否启用（默认启用）
+   - 在裁剪静音之后应用归一化，确保最终音频质量
+   - 支持所有TTS引擎（EdgeTTS、CosyVoice3、MeloTTS）
+
+3. **TTS流式和非流式统一接口** ✅
+   - 统一TTS引擎接口，支持流式和非流式引擎的统一调用
+   - 通过 `is_streaming` 配置项标识引擎类型
+   - 流式引擎：CosyVoice3
+   - 非流式引擎：EdgeTTS、MeloTTS
+   - 对话管理器自动适配不同引擎类型，无需修改调用代码
+   - 保持接口一致性，便于引擎切换和扩展
+
+4. **首句切分延迟判断优化** (`voice_chatbot/llm/llm_openai_stream.py`) ✅
+   - 优化首句逗号切分逻辑，增加延迟判断机制
+   - 当遇到第一个逗号时，不立即切分，而是等待一定数量的字符
+   - 在延迟范围内（默认5个字符）检查是否有句子结束符（。！？等）
+   - 如果延迟范围内有句子结束符：等待按句子结束符切分（保持完整句子）
+   - 如果延迟范围内没有句子结束符：按逗号切分（快速响应）
+   - 通过配置项 `llm.first_sentence_comma_delay_chars` 控制延迟字符数（默认5）
+   - 解决类似"我一直在等你回来啊，哥哥。"这类句子的切分问题
+   - 在 `get_complete_sentences()` 函数中实现延迟判断逻辑
+
+#### 修改文件清单
+
+1. `voice_chatbot/tts/melo_tts_engine.py` - 新建文件，实现MeloTTS引擎
+2. `voice_chatbot/utils/config.py` - 添加 `llm.first_sentence_comma_delay_chars` 配置项
+3. `voice_chatbot/llm/llm_openai_stream.py` - 优化首句切分逻辑，添加延迟判断
+4. 所有TTS引擎文件 - 添加响度归一化处理（`edge_tts_engine.py`、`cosyvoice_engine.py`、`melo_tts_engine.py`）
+
+#### 配置说明
+
+**MeloTTS引擎配置** (`config.py`):
+```python
+"melo_tts": {
+    "api_url": "http://127.0.0.1:8101",  # MeloTTS API地址
+    "api_endpoint": "/tts",  # TTS生成接口
+    "init_endpoint": "/init",  # 模型初始化接口
+    "timeout": 30.0,  # 请求超时时间
+    "model_language": "ZH",  # 模型语言
+    "speaker_name_map": {"zh": "ZH", "en": "EN", "ja": "JA"},  # 语言-说话人映射
+    "default_speaker_name": "ZH",  # 默认说话人
+    "speed": 1.0,  # 默认语速
+    "sdp_ratio": 0.2,  # SDP比例
+    "noise_scale": 0.6,  # 噪声比例
+    "noise_scale_w": 0.8,  # 噪声宽度比例
+}
+```
+
+**首句切分配置** (`config.py`):
+```python
+"llm": {
+    "first_sentence_comma_delay_chars": 5,  # 首句逗号延迟字符数
+}
+```
+
+**TTS响度归一化配置** (`config.py`):
+```python
+"tts": {
+    "enable_normalize_loudness": True,  # 是否启用响度归一化
+}
+```
+
+#### 关键实现细节
+
+1. **MeloTTS引擎**：
+   - 使用 `requests.Session` 复用HTTP连接，提高性能
+   - 支持自动语言检测，根据文本内容选择说话人
+   - 优先使用 `speaker_name_map`（与WebUI一致），向后兼容 `speaker_id_map`
+   - 支持文件缓存和内存缓存双重缓存机制
+   - 支持任务取消检查，可中断长时间请求
+
+2. **响度归一化**：
+   - 在音频处理流程的最后阶段应用（裁剪静音之后）
+   - 使用pydub的 `normalize()` 方法，自动调整到0dBFS
+   - 避免音频削波，确保播放质量
+   - 对所有TTS引擎统一应用
+
+3. **流式/非流式统一接口**：
+   - 通过配置项的 `is_streaming` 标识引擎类型
+   - 对话管理器根据引擎类型自动选择调用方式
+   - 保持接口一致性，便于扩展新引擎
+
+4. **首句切分延迟判断**：
+   - 延迟判断逻辑在 `get_complete_sentences()` 函数中实现
+   - 优先检查句子结束符（保持原有逻辑）
+   - 只有在没有句子结束符且是首句且有逗号时，才进行延迟判断
+   - 延迟判断时检查逗号后指定字符数内是否有句子结束符
+   - 如果字符数不足，等待更多内容
+
+#### 使用示例
+
+**首句切分示例**：
+- 文本："我一直在等你回来啊，哥哥。"
+  - 当遇到逗号时，等待5个字符
+  - 5个字符内出现句号"。"，等待按句号切分
+  - 最终返回完整句子："我一直在等你回来啊，哥哥。"
+
+- 文本："我一直在等你回来啊，哥哥啊哥哥"
+  - 当遇到逗号时，等待5个字符
+  - 5个字符内没有句子结束符，按逗号切分
+  - 返回："我一直在等你回来啊"
+
+#### 测试结果
+
+- ✅ MeloTTS引擎基本功能测试通过
+- ✅ 响度归一化功能测试通过
+- ✅ 流式/非流式引擎统一接口测试通过
+- ✅ 首句切分延迟判断逻辑测试通过
+- ✅ 配置项验证通过
+
+#### 相关文件
+
+- `voice_chatbot/tts/melo_tts_engine.py` - MeloTTS引擎实现
+- `voice_chatbot/tts/edge_tts_engine.py` - EdgeTTS引擎（添加响度归一化）
+- `voice_chatbot/tts/cosyvoice_engine.py` - CosyVoice3引擎（添加响度归一化）
+- `voice_chatbot/llm/llm_openai_stream.py` - LLM流式生成（首句切分优化）
+- `voice_chatbot/utils/config.py` - 配置文件（新增配置项）
+
+---
+
 ## 2025-12-25 02:13 - StateManager状态管理器实现（事件驱动版，v3.0 新架构）
 
 ### 实现内容

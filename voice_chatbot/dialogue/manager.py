@@ -370,7 +370,38 @@ class DialogueManager:
         # 兼容旧的配置值（edge_tts -> edgetts）
         if tts_engine_type == "edge_tts":
             tts_engine_type = "edgetts"
-        if tts_engine_type == "cosyvoice3":
+        
+        # 规范化引擎类型名称（用于配置读取）
+        engine_config_key = tts_engine_type
+        if tts_engine_type in ("melotts", "melo_tts"):
+            engine_config_key = "melo_tts"
+        elif tts_engine_type == "edgetts":
+            engine_config_key = "edge_tts"
+        
+        # 保存引擎类型（用于后续判断流式/非流式）
+        self.tts_engine_type = engine_config_key
+        
+        # 处理 MeloTTS 引擎
+        if tts_engine_type in ("melotts", "melo_tts"):
+            try:
+                from voice_chatbot.tts import MeloTTSEngine, HAS_MELOTTS
+                if HAS_MELOTTS:
+                    self.tts_engine = MeloTTSEngine(config=self.config, event_bus=self.event_bus)
+                    log_info("MANAGER", f"TTS引擎初始化完成 ({tts_engine_type})", indent=1)
+                else:
+                    log_warn("MANAGER", "MeloTTS模块未安装，使用EdgeTTS", indent=1)
+                    from voice_chatbot.tts.edge_tts_engine import EdgeTTSEngine
+                    self.tts_engine = EdgeTTSEngine(config=self.config, event_bus=self.event_bus)
+                    self.tts_engine_type = "edge_tts"
+                    log_info("MANAGER", "TTS引擎初始化完成 (edge_tts)", indent=1)
+            except ImportError:
+                log_warn("MANAGER", "MeloTTS模块导入失败，使用EdgeTTS", indent=1)
+                from voice_chatbot.tts.edge_tts_engine import EdgeTTSEngine
+                self.tts_engine = EdgeTTSEngine(config=self.config, event_bus=self.event_bus)
+                self.tts_engine_type = "edge_tts"
+                log_info("MANAGER", "TTS引擎初始化完成 (edge_tts)", indent=1)
+        # 处理 CosyVoice3 引擎
+        elif tts_engine_type == "cosyvoice3":
             try:
                 from voice_chatbot.tts import CosyVoice3Engine, HAS_COSYVOICE3
                 if HAS_COSYVOICE3:
@@ -380,12 +411,15 @@ class DialogueManager:
                     log_warn("MANAGER", "CosyVoice3模块未安装，使用EdgeTTS", indent=1)
                     from voice_chatbot.tts.edge_tts_engine import EdgeTTSEngine
                     self.tts_engine = EdgeTTSEngine(config=self.config, event_bus=self.event_bus)
+                    self.tts_engine_type = "edge_tts"
                     log_info("MANAGER", "TTS引擎初始化完成 (edge_tts)", indent=1)
             except ImportError:
                 log_warn("MANAGER", "CosyVoice3模块导入失败，使用EdgeTTS", indent=1)
                 from voice_chatbot.tts.edge_tts_engine import EdgeTTSEngine
                 self.tts_engine = EdgeTTSEngine(config=self.config, event_bus=self.event_bus)
+                self.tts_engine_type = "edge_tts"
                 log_info("MANAGER", "TTS引擎初始化完成 (edge_tts)", indent=1)
+        # 默认使用 EdgeTTS
         else:
             from voice_chatbot.tts.edge_tts_engine import EdgeTTSEngine
             self.tts_engine = EdgeTTSEngine(config=self.config, event_bus=self.event_bus)
@@ -2143,8 +2177,9 @@ class DialogueManager:
                 log_info("TIME", "记录TTS线程开始时间", indent=1)
                 self.performance_timer.record_tts_thread_start()
                 
-                # 判断TTS引擎类型（是否支持流式）
-                is_streaming = hasattr(self.tts_engine, 'generate_stream')
+                # 从配置判断TTS引擎类型（是否支持流式）
+                engine_config_key = getattr(self, 'tts_engine_type', 'edge_tts')
+                is_streaming = self.config.get(f"tts.engines.{engine_config_key}.is_streaming", False)
                 
                 if is_streaming:
                     # 流式模式（CosyVoice3）
@@ -2161,12 +2196,12 @@ class DialogueManager:
                     # 6. 实现真正的pipeline模式：LLM、TTS、播放三者并行工作
                     #
                     # 注意：当前实现使用非流式模式，需要完整实现流式TTS生成逻辑
-                    log_info("MANAGER", "使用流式TTS模式（CosyVoice3）- 待实现", indent=1)
+                    log_info("MANAGER", f"使用流式TTS模式（{engine_config_key}）- 待实现", indent=1)
                     # 暂时使用非流式模式作为fallback
                     is_streaming = False
                 else:
                     # 非流式模式（EdgeTTS）
-                    log_info("MANAGER", "使用非流式TTS模式（EdgeTTS）", indent=1)
+                    log_info("MANAGER", f"使用非流式TTS模式（{engine_config_key}）", indent=1)
                     
                     # 从句子队列获取句子并生成TTS
                     first_audio = True
