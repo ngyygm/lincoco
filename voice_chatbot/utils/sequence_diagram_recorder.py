@@ -51,7 +51,6 @@ class SequenceDiagramRecorder:
         "VAD_SPEECH_END": "VAD",
         "ASR_RECOGNITION_START": "ASR",
         "ASR_PARTIAL_RESULT": "ASR",
-        "ASR_STABLE_RESULT": "ASR",
         "ASR_FINAL_RESULT": "ASR",
         "ASR_RECOGNITION_END": "ASR",
         "LLM_GENERATION_START": "LLM",
@@ -235,12 +234,6 @@ class SequenceDiagramRecorder:
             return f"VAD_SPEECH_START{relative_time}"
         elif event_type == "VAD_SPEECH_END":
             return f"VAD_SPEECH_END{relative_time}"
-        elif event_type == "ASR_STABLE_RESULT":
-            text = data.get("text", "") if data else ""
-            if text:
-                text_preview = text[:20] + "..." if len(text) > 20 else text
-                return f"ASR_STABLE_RESULT: {text_preview}{relative_time}"
-            return f"ASR_STABLE_RESULT{relative_time}"
         elif event_type == "ASR_FINAL_RESULT":
             text = data.get("text", "") if data else ""
             if text:

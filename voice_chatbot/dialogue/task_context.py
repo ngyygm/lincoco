@@ -34,7 +34,7 @@ class TaskContext:
     def __init__(self, task_id: int, user_input: str = ""):
         """
         初始化任务上下文
-        
+
         Args:
             task_id: 任务ID（唯一标识）
             user_input: 用户输入（可选）
@@ -46,9 +46,13 @@ class TaskContext:
         self._status = "pending"  # pending/processing/playing/completed/cancelled
         self._is_valid = True
         self._lock = threading.Lock()
-        
+
         # 额外的任务数据（用于扩展）
         self._extra_data: Dict[str, Any] = {}
+
+        # 时间范围管理（VAD和ASR配合）
+        self._text_start_time = 0.0  # 文本开始时间戳（0表示未设置）
+        self._text_end_time = 0.0    # 文本结束时间戳
     
     def check_valid(self):
         """
@@ -198,10 +202,62 @@ class TaskContext:
         with self._lock:
             self._extra_data[key] = value
     
+    @property
+    def text_start_time(self) -> float:
+        """
+        获取文本开始时间（线程安全）
+
+        Returns:
+            文本开始时间戳（0表示未设置）
+        """
+        with self._lock:
+            return self._text_start_time
+
+    def set_text_start_time(self, start_time: float):
+        """
+        设置文本开始时间（线程安全）
+
+        Args:
+            start_time: 文本开始时间戳
+        """
+        with self._lock:
+            self._text_start_time = start_time
+
+    @property
+    def text_end_time(self) -> float:
+        """
+        获取文本结束时间（线程安全）
+
+        Returns:
+            文本结束时间戳
+        """
+        with self._lock:
+            return self._text_end_time
+
+    def set_text_end_time(self, end_time: float):
+        """
+        设置文本结束时间（线程安全）
+
+        Args:
+            end_time: 文本结束时间戳
+        """
+        with self._lock:
+            self._text_end_time = end_time
+
+    def reset_text_time_range(self):
+        """
+        重置文本时间范围（线程安全）
+
+        将text_start_time和text_end_time都重置为0，表示新一轮对话。
+        """
+        with self._lock:
+            self._text_start_time = 0.0
+            self._text_end_time = 0.0
+
     def to_dict(self) -> Dict[str, Any]:
         """
         将任务上下文转换为字典（用于日志和调试）
-        
+
         Returns:
             任务上下文字典
         """
@@ -213,13 +269,16 @@ class TaskContext:
                 "start_time": self._start_time,
                 "status": self._status,
                 "is_valid": self._is_valid,
+                "text_start_time": self._text_start_time,
+                "text_end_time": self._text_end_time,
                 "extra_data": self._extra_data.copy()
             }
-    
+
     def __repr__(self) -> str:
         """返回任务上下文的字符串表示"""
         with self._lock:
             return (f"TaskContext(task_id={self._task_id}, "
                    f"status={self._status}, "
                    f"is_valid={self._is_valid}, "
-                   f"user_input='{self._user_input[:50]}...')")
+                   f"user_input='{self._user_input[:50]}...', "
+                   f"text_range=[{self._text_start_time:.3f}, {self._text_end_time:.3f}]")

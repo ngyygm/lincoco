@@ -29,20 +29,23 @@ class WebRTCVAD:
         config,
         on_speech_start: Optional[Callable[[], None]] = None,
         on_speech_end: Optional[Callable[[], None]] = None,
+        on_speech_active: Optional[Callable[[], None]] = None,
         event_bus = None
     ):
         """
         初始化 VAD 检测器
-        
+
         Args:
             config: 配置对象
             on_speech_start: 语音开始回调函数
             on_speech_end: 语音结束回调函数
+            on_speech_active: 持续语音活动回调函数（在检测到语音活动时持续调用）
             event_bus: 事件总线（用于发布 VAD 事件）
         """
         self.config = config
         self.on_speech_start = on_speech_start
         self.on_speech_end = on_speech_end
+        self.on_speech_active = on_speech_active
         self.event_bus = event_bus
         
         # 从配置获取参数
@@ -181,12 +184,12 @@ class WebRTCVAD:
                         
                         # 检测语音活动
                         current_speaking = self._detect_speech(audio_bytes)
-                        
+
                         # 更新状态并触发回调
                         with self._state_lock:
                             self._previous_is_speaking = self.is_speaking
                             self.is_speaking = current_speaking
-                        
+
                         # 状态变化时触发回调
                         if current_speaking and not self._previous_is_speaking:
                             # 从静音变为有语音
@@ -197,7 +200,7 @@ class WebRTCVAD:
                                     self.on_speech_start()
                                 except Exception as e:
                                     log_error("VAD", f"语音开始回调错误: {e}", indent=1)
-                        
+
                         elif not current_speaking and self._previous_is_speaking:
                             # 从有语音变为静音
                             log_info("VAD", "检测到语音活动结束", indent=0)
@@ -207,6 +210,15 @@ class WebRTCVAD:
                                     self.on_speech_end()
                                 except Exception as e:
                                     log_error("VAD", f"语音结束回调错误: {e}", indent=1)
+
+                        # 持续语音活动时触发回调（用于更新last_active_time）
+                        elif current_speaking:
+                            # 持续有语音
+                            if self.on_speech_active:
+                                try:
+                                    self.on_speech_active()
+                                except Exception as e:
+                                    log_error("VAD", f"持续语音活动回调错误: {e}", indent=1)
             
             except Exception as e:
                 log_error("VAD", f"后台线程错误: {e}", indent=0)

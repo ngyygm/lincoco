@@ -41,7 +41,6 @@ EVENT_CATEGORY_MAP = {
     EventType.ASR_RECOGNITION_START: "ASR",
     EventType.ASR_MODEL_INFERENCE: "ASR",
     EventType.ASR_PARTIAL_RESULT: "ASR",
-    EventType.ASR_STABLE_RESULT: "ASR",
     EventType.ASR_FINAL_RESULT: "ASR",
     EventType.ASR_RECOGNITION_END: "ASR",
     
@@ -95,7 +94,6 @@ EVENT_MESSAGE_TEMPLATES = {
     EventType.ASR_RECOGNITION_START: "ASR识别开始（任务ID: {task_id}）",
     EventType.ASR_MODEL_INFERENCE: "ASR模型推理",
     EventType.ASR_PARTIAL_RESULT: "部分识别: {text}",
-    EventType.ASR_STABLE_RESULT: "稳定识别结果（早期提交）: {text}",
     EventType.ASR_FINAL_RESULT: "最终识别结果: {text}",
     EventType.ASR_RECOGNITION_END: "ASR识别结束",
     
@@ -383,13 +381,6 @@ class EventLogger:
                         timestamp=event.timestamp,
                         data=event.data
                     )
-                    # 添加特殊注释（如早期提交）
-                    if event.event_type == EventType.ASR_STABLE_RESULT:
-                        recorder.add_note("Manager", "检测到VAD已结束 + 结果稳定")
-                    elif event.event_type == EventType.ASR_FINAL_RESULT:
-                        # 检查是否已通过早期提交处理
-                        if recorder.task_id == task_id:
-                            recorder.add_note("Manager", "已处理，跳过")
                 self.last_flow_event_time = event.timestamp
     
     def _is_key_event(self, event_type: EventType) -> bool:
@@ -406,7 +397,6 @@ class EventLogger:
             EventType.VAD_SPEECH_START,
             EventType.VAD_SPEECH_END,
             EventType.ASR_RECOGNITION_START,
-            EventType.ASR_STABLE_RESULT,
             EventType.ASR_FINAL_RESULT,
             EventType.ASR_RECOGNITION_END,
             EventType.LLM_GENERATION_START,

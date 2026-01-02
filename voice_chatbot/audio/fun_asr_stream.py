@@ -8,6 +8,7 @@ FunASR流式语音识别模块
 import threading
 import queue
 import time
+import inspect
 from typing import Optional, Callable, Dict, Any
 from collections import deque
 
@@ -183,6 +184,27 @@ class FunASRStream:
             on_final_result: 最终结果回调函数 (text, confidence)
             event_bus: 事件总线（用于发送事件和统一日志输出）
         """
+        # 检查回调函数接受的参数数量
+        self._on_partial_result_needs_confidence = False
+        if on_partial_result:
+            import inspect
+            try:
+                sig = inspect.signature(on_partial_result)
+                # 排除self参数后的参数数量
+                param_count = len([p for p in sig.parameters.values() if p.name != 'self'])
+                self._on_partial_result_needs_confidence = param_count >= 2
+            except:
+                pass
+        
+        self._on_final_result_needs_confidence = False
+        if on_final_result:
+            import inspect
+            try:
+                sig = inspect.signature(on_final_result)
+                param_count = len([p for p in sig.parameters.values() if p.name != 'self'])
+                self._on_final_result_needs_confidence = param_count >= 2
+            except:
+                pass
         if not HAS_FUNASR:
             raise ImportError("funasr库未安装，请安装：pip install funasr")
         
@@ -200,23 +222,7 @@ class FunASRStream:
         self.decoder_chunk_look_back = config.get("asr.decoder_chunk_look_back", 1)
         self.pre_buffer_seconds = config.get("asr.pre_buffer_seconds", 0.5)
         self.language = config.get("asr.language", "zh")  # 默认中文
-        self.no_speech_threshold = config.get("dialogue.no_speech_threshold", 0.5)  # 静音阈值（秒）
-        
-        # 早期提交优化配置
-        self.early_commit_enabled = config.get("asr.early_commit_enabled", True)  # 是否启用早期提交
-        # 稳定结果持续时间 = no_speech_threshold * ratio（自动按比例计算）
-        stable_result_ratio = config.get("asr.stable_result_ratio", 0.6)
-        self.stable_result_duration = self.no_speech_threshold * stable_result_ratio
-        # 稳定结果最小文本长度（避免过短文本触发早期提交）
-        self.min_stable_text_length = config.get("asr.min_stable_text_length", 3)
-        
-        # 稳定结果检测状态（基于时间的稳定检测）
-        self._last_stable_text = ""  # 上次稳定检测的文本
-        self._last_stable_time = 0.0  # 上次文本变化的时间
-        self._stable_result_sent = False  # 是否已发送稳定结果事件
-        self._vad_ended = False  # VAD是否已结束（由外部设置）
-        self._recognition_start_time = 0.0  # 识别开始时间（用于计算识别时长）
-        self.min_recognition_duration = config.get("asr.min_recognition_duration", 1.0)  # 最小识别时长
+        # 注意：ASR不再使用no_speech_threshold，完全依赖VAD的speaking标志来决定何时结束识别
         
         # 验证模型路径
         if not self.model_path:
@@ -329,7 +335,7 @@ class FunASRStream:
     def start_recognition(self) -> bool:
         """
         启动流式识别
-        
+
         Returns:
             True表示启动成功，False表示失败
         """
@@ -337,36 +343,35 @@ class FunASRStream:
             if self.recognizing:
                 self._publish_log("WARN", "已经在识别中，不重复启动")
                 return False
-            
+
+            # 记录ASR开始时间
+            import time
+            start_time = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+            self._publish_log("INFO", f"ASR识别开始 - 时间: {start_time}")
+            self._publish_log("DEBUG", f"任务ID: {self.current_task_id}", indent=1)
+            self._publish_log("DEBUG", f"初始speaking状态: True（等待VAD）", indent=1)
+
             # 检查模型是否已加载（如果已加载，直接使用，不再调用_load_model）
             if not self.model_loaded or self.asr_model is None:
                 # 加载模型（如果未加载）
                 if not self._load_model():
                     self._publish_log("ERROR", "模型加载失败，无法启动识别")
                     return False
-            
+
             # 清空队列和状态
             while not self.audio_queue.empty():
                 try:
                     self.audio_queue.get_nowait()
                 except:
                     pass
-            
+
             self.asr_cache = {}
             self.final_result = ""
             self.partial_result = ""
             self.deduplicator.reset()
             self.recognizing = True
             self.speaking = True
-            
-            # 重置早期提交状态（基于时间的稳定检测）
-            self._last_stable_text = ""
-            self._last_stable_time = 0.0
-            self._stable_result_sent = False
-            self._vad_ended = False
-            self._recognition_start_time = time.time()  # 记录识别开始时间
-            self._recognition_start_time = time.time()  # 记录识别开始时间
-            
+
             # 启动识别线程
             self.recognition_thread = threading.Thread(
                 target=self._recognition_thread_func,
@@ -374,7 +379,7 @@ class FunASRStream:
                 name="ASR-Recog"
             )
             self.recognition_thread.start()
-            
+
             # 发送ASR识别开始事件
             if self.event_bus:
                 try:
@@ -386,7 +391,7 @@ class FunASRStream:
                     self.event_bus.publish(event)
                 except Exception as e:
                     self._publish_log("ERROR", f"发送ASR_RECOGNITION_START事件错误: {e}", indent=1)
-            
+
             self._publish_log("INFO", "启动流式识别")
             return True
     
@@ -395,9 +400,19 @@ class FunASRStream:
         with self.state_lock:
             if not self.recognizing:
                 return
-            
+
+            # 记录停止识别的时间和原因
+            import time
+            stop_time = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+            self._publish_log("INFO", f"ASR停止识别调用 - 时间: {stop_time}")
+            self._publish_log("INFO", f"停止原因: 外部调用stop_recognition()", indent=1)
+            self._publish_log("DEBUG", f"调用前speaking状态: {self.speaking}", indent=1)
+            self._publish_log("DEBUG", f"调用前recognizing状态: {self.recognizing}", indent=1)
+            self._publish_log("DEBUG", f"当前部分结果: {self.partial_result}", indent=1)
+
             self.speaking = False
             self._publish_log("INFO", "停止识别", indent=1)
+            self._publish_log("DEBUG", f"设置speaking=False，识别线程将退出主循环", indent=1)
     
     def feed_audio(self, audio_data: np.ndarray):
         """
@@ -453,134 +468,6 @@ class FunASRStream:
         with self.state_lock:
             return self.recognizing
     
-    def set_vad_ended(self, ended: bool = True):
-        """
-        设置VAD结束状态（由外部DialogueManager调用）
-        
-        用于早期提交优化：当VAD结束且ASR结果稳定时，提前触发LLM推理
-        
-        Args:
-            ended: VAD是否已结束
-        """
-        with self.state_lock:
-            self._vad_ended = ended
-            if ended:
-                self._publish_log("DEBUG", "VAD结束状态已设置，启用稳定结果检测", indent=1)
-    
-    def is_stable_result_sent(self) -> bool:
-        """
-        检查是否已发送稳定结果事件
-        
-        Returns:
-            True表示已发送，False表示未发送
-        """
-        with self.state_lock:
-            return self._stable_result_sent
-    
-    def _check_and_send_stable_result(self, text: str, confidence: Optional[float]):
-        """
-        检查并发送稳定结果事件（早期提交优化）
-        
-        基于时间的稳定检测：当满足以下条件时发送ASR_STABLE_RESULT事件：
-        1. 早期提交功能已启用
-        2. 尚未发送过稳定结果事件
-        3. 结果文本非空
-        4. 识别时长达到最小要求（min_recognition_duration）
-        5. 结果文本保持不变超过stable_result_duration秒
-        
-        注意：不再依赖VAD结束，而是基于文本稳定性和识别时长
-        
-        Args:
-            text: 当前识别结果文本
-            confidence: 置信度
-        """
-        # 检查是否启用早期提交
-        if not self.early_commit_enabled:
-            return
-        
-        # 检查是否已发送过
-        with self.state_lock:
-            if self._stable_result_sent:
-                return
-        
-        # 初始化识别开始时间（第一次调用时）
-        current_time = time.time()
-        if self._recognition_start_time == 0.0:
-            self._recognition_start_time = current_time
-        
-        # 检查识别时长是否达到最小要求
-        recognition_duration = current_time - self._recognition_start_time
-        if recognition_duration < self.min_recognition_duration:
-            # 识别时长不足，不触发稳定结果
-            return
-        
-        # 文本为空，重置状态
-        if not text or not text.strip():
-            self._last_stable_text = ""
-            self._last_stable_time = 0.0
-            return
-        
-        # 检查文本长度是否达到最小阈值（避免过短文本触发早期提交）
-        text_length = len(text.strip())
-        if text_length < self.min_stable_text_length:
-            # 文本太短，不触发稳定结果，但更新状态以便后续检测
-            if text != self._last_stable_text:
-                self._last_stable_text = text
-                self._last_stable_time = current_time
-            return
-        
-        # 检查文本是否与上次相同
-        if text == self._last_stable_text:
-            # 文本相同，检查时间差是否超过阈值
-            time_diff = current_time - self._last_stable_time
-            if time_diff >= self.stable_result_duration:
-                # 结果稳定，发送事件
-                with self.state_lock:
-                    if self._stable_result_sent:  # 双重检查
-                        return
-                    self._stable_result_sent = True
-                
-                self._publish_log("INFO", f"检测到稳定结果（保持{time_diff:.2f}秒不变），触发早期提交: {text}", indent=1)
-                
-                # 控制台输出早期提交提示（使用颜色）
-                try:
-                    import sys
-                    GREEN = "\033[32m"
-                    BOLD = "\033[1m"
-                    RESET = "\033[0m"
-                    if sys.platform == "win32":
-                        try:
-                            import ctypes
-                            kernel32 = ctypes.windll.kernel32
-                            kernel32.SetConsoleMode(kernel32.GetStdHandle(-11), 7)
-                        except:
-                            pass
-                    print(f"{GREEN}{BOLD}[早期提交触发]{RESET} ASR稳定结果已就绪，提前启动LLM推理")
-                except:
-                    print("[早期提交触发] ASR稳定结果已就绪，提前启动LLM推理")
-                
-                # 发送ASR_STABLE_RESULT事件
-                if self.event_bus:
-                    try:
-                        event = create_event(
-                            EventType.ASR_STABLE_RESULT,
-                            data={
-                                "task_id": self.current_task_id,
-                                "text": text,
-                                "confidence": confidence,
-                                "is_early_commit": True,
-                                "stable_duration": time_diff
-                            },
-                            source="ASR"
-                        )
-                        self.event_bus.publish(event)
-                    except Exception as e:
-                        self._publish_log("ERROR", f"发送ASR_STABLE_RESULT事件错误: {e}", indent=1)
-        else:
-            # 文本变化，更新记录
-            self._last_stable_text = text
-            self._last_stable_time = current_time
-    
     def _extract_confidence(self, result: Dict[str, Any]) -> Optional[float]:
         """
         从FunASR结果中提取置信度
@@ -611,21 +498,22 @@ class FunASRStream:
     
     def _recognition_thread_func(self):
         """流式ASR识别线程函数"""
-        self._publish_log("INFO", "识别线程启动")
-        
+        import time
+        thread_start_time = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+        self._publish_log("INFO", f"识别线程启动 - 时间: {thread_start_time}")
+        self._publish_log("DEBUG", f"线程ID: {threading.get_ident()}", indent=1)
+        self._publish_log("DEBUG", f"初始状态: recognizing={self.recognizing}, speaking={self.speaking}", indent=1)
+
         try:
             buffer = np.array([], dtype=np.float32)
-            
+
             # 首先处理预缓存的音频（VAD检测前的音频）
             pre_audio = self.pre_buffer.get_all()
             if len(pre_audio) > 0:
-                self._publish_log("DEBUG", f"加载预缓存音频: {len(pre_audio)/self.sample_rate:.2f}秒", indent=1)
+                self._publish_log("DEBUG", f"加载预缓存音频: {len(pre_audio)/self.sample_rate:.2f}秒 ({len(pre_audio)}采样点)", indent=1)
                 buffer = np.concatenate([buffer, pre_audio])
-            
+
             chunk_count = 0
-            # 注意：time模块已在文件顶部导入，这里使用别名避免与调试日志中的import冲突
-            import time as time_module  # 确保time模块可用
-            last_speech_time = time_module.time()  # 记录最后一次识别到文本的时间
             last_text_length = 0  # 记录上一次文本长度，用于检测是否有新文本
         
             while True:
@@ -635,22 +523,23 @@ class FunASRStream:
                         audio_chunk = self.audio_queue.get(timeout=0.05)
                         buffer = np.concatenate([buffer, audio_chunk])
                     except queue.Empty:
-                        # 队列为空，检查静音超时
-                        current_time = time_module.time()
+                        # 队列为空，检查VAD状态
                         with self.state_lock:
                             # 如果VAD已经标记为结束，直接退出
+                            # 注意：ASR不应该自己决定何时结束，应该完全依赖VAD的speaking标志
                             if not self.speaking:
+                                # ASR结束：记录结束时间和原因
+                                import time
+                                end_time = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+                                current_text = self.partial_result
+                                self._publish_log("INFO", f"ASR结束判定 - 时间: {end_time}", indent=1)
+                                self._publish_log("INFO", f"结束原因: VAD判定speaking=False（用户停止说话）", indent=1)
+                                self._publish_log("INFO", f"已处理音频chunks: {chunk_count}个", indent=1)
+                                self._publish_log("INFO", f"当前识别文本: {current_text}", indent=1)
+                                self._publish_log("INFO", f"当前文本长度: {len(current_text)}字符", indent=1)
+                                self._publish_log("DEBUG", f"缓冲区剩余音频: {len(buffer)}采样点", indent=1)
                                 # 语音已结束，处理剩余音频
                                 break
-                            
-                            # ASR自动检测静音：如果文本长度没有变化且超过阈值，自动结束
-                            if self.partial_result and len(self.partial_result) == last_text_length:
-                                silence_duration = current_time - last_speech_time
-                                if silence_duration >= self.no_speech_threshold:
-                                    self._publish_log("INFO", f"检测到静音超过阈值（{silence_duration:.2f}秒 >= {self.no_speech_threshold}秒），自动结束识别", indent=1)
-                                    # 自动结束识别
-                                    self.speaking = False
-                                    break
                         continue
                     
                     # 当累积足够的音频时进行识别
@@ -678,10 +567,9 @@ class FunASRStream:
                                     full_text = self.deduplicator.process(new_text)
                                     self.partial_result = full_text
                                     
-                                    # 更新文本长度和最后识别时间（有新文本）
+                                    # 更新文本长度（有新文本）
                                     if len(full_text) != last_text_length:
                                         last_text_length = len(full_text)
-                                        last_speech_time = time_module.time()
                                     
                                     # 提取置信度
                                     confidence = self._extract_confidence(res[0])
@@ -689,7 +577,11 @@ class FunASRStream:
                                     # 触发部分结果回调
                                     if self.on_partial_result:
                                         try:
-                                            self.on_partial_result(full_text, confidence)
+                                            # 根据回调函数接受的参数数量决定是否传递confidence
+                                            if self._on_partial_result_needs_confidence:
+                                                self.on_partial_result(full_text, confidence)
+                                            else:
+                                                self.on_partial_result(full_text)
                                         except Exception as e:
                                             self._publish_log("ERROR", f"部分结果回调函数错误: {e}", indent=2)
                                     
@@ -710,9 +602,6 @@ class FunASRStream:
                                             self.event_bus.publish(partial_event)
                                         except Exception as e:
                                             self._publish_log("ERROR", f"发送ASR_PARTIAL_RESULT事件错误: {e}", indent=2)
-                                    
-                                    # 检查并发送稳定结果事件（早期提交优化）
-                                    self._check_and_send_stable_result(full_text, confidence)
                                     
                         except Exception as e:
                             self._publish_log("ERROR", f"识别错误: {e}", indent=1)
@@ -764,7 +653,10 @@ class FunASRStream:
                         # 触发最终结果回调
                         if self.on_final_result:
                             try:
-                                self.on_final_result(self.final_result, confidence)
+                                if self._on_final_result_needs_confidence:
+                                    self.on_final_result(self.final_result, confidence)
+                                else:
+                                    self.on_final_result(self.final_result)
                             except Exception as e:
                                 self._publish_log("ERROR", f"最终结果回调函数错误: {e}", indent=1)
                     else:
@@ -793,59 +685,72 @@ class FunASRStream:
                             self.on_final_result(self.final_result, None)
                         except Exception as e:
                             self._publish_log("ERROR", f"最终结果回调函数错误: {e}", indent=1)
-            else:
-                # 没有剩余音频，使用空数组进行最终识别以获取缓存中的内容
-                try:
-                    res = self.asr_model.generate(
-                        input=np.array([], dtype=np.float32),
-                        cache=self.asr_cache,
-                        is_final=True,
-                        disable_pbar=True,
-                        chunk_size=self.chunk_size,
-                        encoder_chunk_look_back=self.encoder_chunk_look_back,
-                        decoder_chunk_look_back=self.decoder_chunk_look_back
-                    )
-                    
-                    if res and len(res) > 0:
-                        final_chunk_text = res[0].get('text', '').strip()
-                        if final_chunk_text:
-                            self.final_result = self.deduplicator.process(final_chunk_text)
-                        else:
-                            self.final_result = self.deduplicator.get_text()
                     else:
-                        self.final_result = self.deduplicator.get_text()
-                    
-                    # 提取置信度
-                    confidence = None
-                    if res and len(res) > 0:
-                        confidence = self._extract_confidence(res[0])
-                    
-                    # 发送ASR最终结果事件
-                    self._send_final_result_events(self.final_result, confidence)
-                    
-                    # 触发最终结果回调
-                    if self.on_final_result:
+                        # 没有剩余音频，使用空数组进行最终识别以获取缓存中的内容
                         try:
-                            self.on_final_result(self.final_result, confidence)
-                        except Exception as e:
-                            self._publish_log("ERROR", f"最终结果回调函数错误: {e}", indent=1)
+                            res = self.asr_model.generate(
+                                input=np.array([], dtype=np.float32),
+                                cache=self.asr_cache,
+                                is_final=True,
+                                disable_pbar=True,
+                                chunk_size=self.chunk_size,
+                                encoder_chunk_look_back=self.encoder_chunk_look_back,
+                                decoder_chunk_look_back=self.decoder_chunk_look_back
+                            )
                             
-                except Exception as e:
-                    self.final_result = self.deduplicator.get_text()
-                    
-                    # 发送ASR最终结果事件
-                    self._send_final_result_events(self.final_result, None)
-                    
-                    # 触发最终结果回调（即使出错）
-                    if self.on_final_result:
-                        try:
-                            self.on_final_result(self.final_result, None)
+                            if res and len(res) > 0:
+                                final_chunk_text = res[0].get('text', '').strip()
+                                if final_chunk_text:
+                                    self.final_result = self.deduplicator.process(final_chunk_text)
+                                else:
+                                    self.final_result = self.deduplicator.get_text()
+                            else:
+                                self.final_result = self.deduplicator.get_text()
+                            
+                            # 提取置信度
+                            confidence = None
+                            if res and len(res) > 0:
+                                confidence = self._extract_confidence(res[0])
+                            
+                            # 发送ASR最终结果事件
+                            self._send_final_result_events(self.final_result, confidence)
+                            
+                            # 触发最终结果回调
+                            if self.on_final_result:
+                                try:
+                                    if self._on_final_result_needs_confidence:
+                                        self.on_final_result(self.final_result, confidence)
+                                    else:
+                                        self.on_final_result(self.final_result)
+                                except Exception as e:
+                                    self._publish_log("ERROR", f"最终结果回调函数错误: {e}", indent=1)
+                            
                         except Exception as e:
-                            self._publish_log("ERROR", f"最终结果回调函数错误: {e}", indent=1)
+                            self.final_result = self.deduplicator.get_text()
+                            
+                            # 发送ASR最终结果事件
+                            self._send_final_result_events(self.final_result, None)
+                            
+                            # 触发最终结果回调（即使出错）
+                            if self.on_final_result:
+                                try:
+                                    if self._on_final_result_needs_confidence:
+                                        self.on_final_result(self.final_result, None)
+                                    else:
+                                        self.on_final_result(self.final_result)
+                                except Exception as e:
+                                    self._publish_log("ERROR", f"最终结果回调函数错误: {e}", indent=1)
             
             # 输出最终结果
-            self._publish_log("INFO", f"识别完成: {self.final_result}")
+            import time
+            final_time = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+            self._publish_log("INFO", f"ASR识别完成 - 时间: {final_time}")
+            self._publish_log("INFO", f"最终识别文本: {self.final_result}")
+            self._publish_log("INFO", f"最终文本长度: {len(self.final_result)}字符")
             self._publish_log("DEBUG", f"共处理 {chunk_count} 个chunk", indent=1)
+            self._publish_log("DEBUG", f"音频chunk_size配置: {self.chunk_size}", indent=1)
+            self._publish_log("DEBUG", f"encoder_chunk_look_back: {self.encoder_chunk_look_back}", indent=1)
+            self._publish_log("DEBUG", f"decoder_chunk_look_back: {self.decoder_chunk_look_back}", indent=1)
         except Exception as e:
             self._publish_log("ERROR", f"识别线程发生未捕获的异常: {e}")
             import traceback
@@ -897,42 +802,46 @@ class FunASRStream:
     def _publish_log(self, level: str, message: str, indent: int = 0):
         """
         通过事件系统发布日志
-        
+
         Args:
             level: 日志级别（INFO, WARN, ERROR, DEBUG）
             message: 日志消息
             indent: 缩进级别
         """
-        if self.event_bus:
-            level_upper = level.upper()
-            if level_upper == "DEBUG":
-                event_type = EventType.LOG_DEBUG
-            elif level_upper == "WARN":
-                event_type = EventType.LOG_WARN
-            elif level_upper == "ERROR":
-                event_type = EventType.LOG_ERROR
-            else:
-                event_type = EventType.LOG_INFO
-            
-            event = create_event(
-                event_type=event_type,
-                data={
-                    "message": message,
-                    "category": "ASR",
-                    "indent": indent,
-                },
-                source="ASR"
-            )
-            self.event_bus.publish(event)
+        # 直接输出日志（确保一定显示）
+        level_upper = level.upper()
+        if level_upper == "DEBUG":
+            log_debug("ASR", message, indent=indent)
+        elif level_upper == "WARN":
+            log_warn("ASR", message, indent=indent)
+        elif level_upper == "ERROR":
+            log_error("ASR", message, indent=indent)
         else:
-            # 回退到直接日志输出
-            level_upper = level.upper()
-            if level_upper == "DEBUG":
-                log_debug("ASR", message, indent=indent)
-            elif level_upper == "WARN":
-                log_warn("ASR", message, indent=indent)
-            elif level_upper == "ERROR":
-                log_error("ASR", message, indent=indent)
-            else:
-                log_info("ASR", message, indent=indent)
+            log_info("ASR", message, indent=indent)
+
+        # 同时也通过事件系统发布（如果event_bus可用）
+        if self.event_bus:
+            try:
+                if level_upper == "DEBUG":
+                    event_type = EventType.LOG_DEBUG
+                elif level_upper == "WARN":
+                    event_type = EventType.LOG_WARN
+                elif level_upper == "ERROR":
+                    event_type = EventType.LOG_ERROR
+                else:
+                    event_type = EventType.LOG_INFO
+
+                event = create_event(
+                    event_type=event_type,
+                    data={
+                        "message": message,
+                        "category": "ASR",
+                        "indent": indent,
+                    },
+                    source="ASR"
+                )
+                self.event_bus.publish(event)
+            except Exception as e:
+                # 事件发布失败，已经通过直接日志输出了，忽略异常
+                pass
 

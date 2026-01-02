@@ -36,10 +36,8 @@ class PerformanceData:
     # ASR时间点
     asr_recognition_start_time: float = 0
     asr_model_inference_time: float = 0
-    asr_stable_result_time: float = 0  # 早期提交稳定结果时间
     asr_final_result_time: float = 0
     asr_recognition_end_time: float = 0
-    asr_early_commit: bool = False  # 是否使用早期提交
     
     # LLM时间点
     llm_generation_start_time: float = 0
@@ -66,10 +64,8 @@ class PerformanceData:
         self.vad_speech_end_time = 0
         self.asr_recognition_start_time = 0
         self.asr_model_inference_time = 0
-        self.asr_stable_result_time = 0
         self.asr_final_result_time = 0
         self.asr_recognition_end_time = 0
-        self.asr_early_commit = False
         self.llm_generation_start_time = 0
         self.llm_request_sent_time = 0
         self.llm_stream_start_time = 0
@@ -146,8 +142,6 @@ class PerformanceMonitor:
                     self._handle_asr_recognition_start(timestamp)
                 elif event_type_value == "asr_model_inference":
                     self._handle_asr_model_inference(timestamp)
-                elif event_type_value == "asr_stable_result":
-                    self._handle_asr_stable_result(timestamp)
                 elif event_type_value == "asr_final_result":
                     self._handle_asr_final_result(timestamp)
                 elif event_type_value in ("asr_end", "asr_recognition_end"):
@@ -197,11 +191,6 @@ class PerformanceMonitor:
     def _handle_asr_model_inference(self, timestamp: float):
         """处理ASR模型推理事件"""
         self.perf_data.asr_model_inference_time = timestamp
-    
-    def _handle_asr_stable_result(self, timestamp: float):
-        """处理ASR稳定结果事件（早期提交）"""
-        self.perf_data.asr_stable_result_time = timestamp
-        self.perf_data.asr_early_commit = True
     
     def _handle_asr_final_result(self, timestamp: float):
         """处理ASR最终结果事件"""
@@ -305,11 +294,8 @@ class PerformanceMonitor:
         if total_latency <= 0:
             return
         
-        # 判断是否使用了早期提交
-        is_early_commit = perf.asr_early_commit and perf.asr_stable_result_time > 0
-        
-        # T1: ASR结果就绪（早期提交使用稳定结果时间，否则使用最终结果时间）
-        t1 = perf.asr_stable_result_time if is_early_commit else perf.asr_final_result_time
+        # T1: ASR结果就绪
+        t1 = perf.asr_final_result_time
         if t1 == 0:
             t1 = perf.asr_recognition_end_time
         
@@ -410,14 +396,11 @@ class PerformanceMonitor:
             print(f"{BLUE}{stage_label}{RESET}")
             if asr_inference_time > 0:
                 print(f"{BLUE}  │     ├─ 模型推理: {ms(asr_inference_time)}ms{RESET}")
-            asr_label = "早期提交" if is_early_commit else "最终结果"
             if asr_result_process_time > 0:
-                print(f"{BLUE}  │     └─ 结果处理: {ms(asr_result_process_time)}ms ({asr_label}){RESET}")
-            elif is_early_commit:
-                print(f"{BLUE}  │     └─ 使用早期提交{RESET}")
+                print(f"{BLUE}  │     └─ 结果处理: {ms(asr_result_process_time)}ms (最终结果){RESET}")
         
         # T1: ASR结果就绪
-        t1_label = "ASR稳定结果" if is_early_commit else "ASR最终结果"
+        t1_label = "ASR最终结果"
         print(f"{WHITE}[T1] {t1_label}{RESET}                          {DIM}{relative_ms(t1)}ms{RESET}")
         
         # 调度阶段
@@ -481,7 +464,6 @@ class PerformanceMonitor:
             EventType.VAD_SPEECH_START,
             EventType.VAD_SPEECH_END,
             EventType.ASR_MODEL_INFERENCE,
-            EventType.ASR_STABLE_RESULT,  # 早期提交稳定结果
             EventType.ASR_FINAL_RESULT,
             EventType.LLM_REQUEST_SENT,
             EventType.LLM_STREAM_START,

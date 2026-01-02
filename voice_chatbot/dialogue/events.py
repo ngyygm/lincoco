@@ -31,7 +31,6 @@ class EventType(Enum):
     ASR_RECOGNITION_START = "asr_recognition_start"    # ASR识别开始
     ASR_MODEL_INFERENCE = "asr_model_inference"        # ASR模型推理（内部细节）
     ASR_PARTIAL_RESULT = "asr_partial_result"          # ASR部分识别结果
-    ASR_STABLE_RESULT = "asr_stable_result"            # ASR稳定结果（早期提交优化）
     ASR_FINAL_RESULT = "asr_final_result"              # ASR最终识别结果
     ASR_RECOGNITION_END = "asr_recognition_end"        # ASR识别结束
     
@@ -92,7 +91,6 @@ EVENT_PRIORITY_MAP = {
     
     # ASR事件
     EventType.ASR_FINAL_RESULT: 7,
-    EventType.ASR_STABLE_RESULT: 7,  # 稳定结果与最终结果同优先级（早期提交）
     EventType.ASR_RECOGNITION_END: 7,
     EventType.ASR_RECOGNITION_START: 6,
     EventType.ASR_MODEL_INFERENCE: 5,

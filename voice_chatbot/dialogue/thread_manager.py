@@ -101,12 +101,19 @@ class ThreadManager:
             # 检查线程名称是否已存在
             if name in self._threads:
                 existing_thread = self._threads[name]
-                if existing_thread.is_alive and existing_thread.thread.is_alive():
+                # 检查线程是否真的还在运行（需要同时检查is_alive标志和线程对象的实际状态）
+                thread_actually_alive = existing_thread.thread.is_alive() if existing_thread.thread else False
+                
+                # 如果线程实际还在运行，则不允许启动新线程
+                if thread_actually_alive:
                     raise ValueError(f"线程 '{name}' 已存在且正在运行")
+                
+                # 线程已结束，移除旧记录（即使is_alive标志为True，但线程实际已结束）
+                if existing_thread.is_alive and not thread_actually_alive:
+                    log_info("THREAD", f"检测到线程记录状态不一致（is_alive=True但线程已结束），清理记录: {name}", indent=1)
                 else:
-                    # 线程已结束，移除旧记录
                     log_debug("THREAD", f"移除已结束的线程记录: {name}", indent=1)
-                    del self._threads[name]
+                del self._threads[name]
             
             # 包装目标函数，添加异常处理和上下文检查
             def wrapped_target(*args, **inner_kwargs):

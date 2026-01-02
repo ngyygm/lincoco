@@ -76,7 +76,8 @@ class TraceableLock:
                         log_info("MANAGER", f"[LOCK-TRACE] 线程 {thread_name} (ID:{thread_id}) 成功获取 {self._name}，等待时间: {wait_duration:.2f}秒", indent=0)
                         del self._waiting_threads[thread_id]
                     else:
-                        log_info("MANAGER", f"[LOCK-TRACE] 线程 {thread_name} (ID:{thread_id}) 获取 {self._name}", indent=0)
+                        pass
+                        # log_info("MANAGER", f"[LOCK-TRACE] 线程 {thread_name} (ID:{thread_id}) 获取 {self._name}", indent=0)
             
             return result
             
@@ -222,7 +223,6 @@ class DialogueManager:
         self.voice_activity_start_time = 0.0  # 新语音活动检测到的时间点（用于判断"什么都没说过"）
         self.nothing_said_yet = False  # 标记当前任务是否被判定为"什么都没说过"
         
-        # 注意：早期提交功能已禁用，不再需要相关标记和锁
         
         log_info("MANAGER", "核心调度器初始化完成", indent=0)
     
@@ -324,6 +324,7 @@ class DialogueManager:
             config=self.config,
             on_speech_start=self._on_vad_speech_start,
             on_speech_end=self._on_vad_speech_end,
+            on_speech_active=self._on_vad_speech_active,
             event_bus=self.event_bus
         )
         log_info("MANAGER", "VAD模块初始化完成", indent=1)
@@ -454,8 +455,6 @@ class DialogueManager:
     
     def _setup_event_subscriptions(self):
         """设置事件订阅"""
-        # 注意：早期提交功能已禁用，不再订阅ASR_STABLE_RESULT事件
-        # 只在ASR识别完整句子后，通过ASR_FINAL_RESULT事件触发LLM
         
         # 订阅播放进度事件（用于实时更新已播放文本）
         progress_filter = EventFilter(event_types=[EventType.AUDIO_PLAY_PROGRESS])
@@ -531,31 +530,44 @@ class DialogueManager:
         self.running = False
         
         # 发布系统停止事件
+        log_info("MANAGER", "发布系统停止事件", indent=1)
         stop_event = create_event(
             EventType.SYSTEM_STOP,
             data={},
             source="DialogueManager"
         )
         self.event_bus.publish(stop_event)
+        log_info("MANAGER", "系统停止事件已发布", indent=1)
         
         # 取消当前任务
+        log_info("MANAGER", "取消当前任务", indent=1)
         self.context_manager.cancel_current_context()
+        log_info("MANAGER", "当前任务已取消", indent=1)
         
         # 停止ASR线程（如果正在运行）
         if self.asr_thread_active:
+            log_info("MANAGER", "停止ASR线程", indent=1)
             self._stop_asr_recognition()
+            log_info("MANAGER", "ASR线程已停止", indent=1)
         
         # 停止所有常驻线程（通过 ThreadManager）
-        self.thread_manager.stop_all_threads(timeout=self.thread_timeout)
+        log_info("MANAGER", "停止所有线程（超时: {}秒）".format(self.thread_timeout), indent=1)
+        stopped_count = self.thread_manager.stop_all_threads(timeout=self.thread_timeout)
+        log_info("MANAGER", "线程停止完成（成功: {}个）".format(stopped_count), indent=1)
         
         # 停止VAD后台线程
         if self.vad:
+            log_info("MANAGER", "停止VAD后台线程", indent=1)
             self.vad.stop_background_thread()
+            log_info("MANAGER", "VAD后台线程已停止", indent=1)
         
         # 停止事件总线处理
+        log_info("MANAGER", "停止事件总线处理", indent=1)
         self.event_bus.stop_processing()
+        log_info("MANAGER", "事件总线处理已停止", indent=1)
         
         # 清理资源
+        log_info("MANAGER", "清理资源", indent=1)
         if self.microphone:
             self.microphone.stop()
         if self.audio_player:
@@ -565,6 +577,7 @@ class DialogueManager:
         if self.asr:
             # ASR清理
             pass
+        log_info("MANAGER", "资源清理完成", indent=1)
         
         log_info("MANAGER", "系统已停止", indent=0)
     
@@ -592,13 +605,13 @@ class DialogueManager:
         if self.asr:
             self.asr.feed_audio(audio_data)
         
-        # 检查VAD状态，更新last_active_time
-        if self.vad and hasattr(self.vad, 'is_speaking') and self.vad.is_speaking:
-            self.last_active_time = time.time()
+        # 注意：last_active_time 只由 VAD 的 _on_vad_speech_start() 回调更新
+        # 不在这里更新，避免音频数据持续输入时误判
         
         # 检查NO_SPEECH_THRESHOLD，触发ASR停止
         if (self.last_active_time > 0 and 
             time.time() - self.last_active_time > self.no_speech_threshold):
+            log_debug("MANAGER", f"检查NO_SPEECH_THRESHOLD: last_active_time={self.last_active_time:.3f}, 距离上次活动={time.time() - self.last_active_time:.3f}秒, 阈值={self.no_speech_threshold}秒", indent=2)
             # 检查ASR是否正在识别
             if self.asr:
                 if hasattr(self.asr, 'state_lock') and hasattr(self.asr, 'recognizing'):
@@ -637,12 +650,12 @@ class DialogueManager:
                 timeout=self.config.get("asr.result_timeout", 30.0)
             )
     
-    def _on_asr_partial_result(self, text: str, confidence: float):
+    def _on_asr_partial_result(self, text, confidence=None):
         """ASR部分结果回调"""
         # 可选：可以在这里处理部分结果（如实时显示）
         log_debug("MANAGER", f"部分识别结果: {text}", indent=0)
     
-    def _on_asr_final_result(self, text: str, confidence: float):
+    def _on_asr_final_result(self, text, confidence=None):
         """ASR最终结果回调"""
         log_info("ASR", f"最终识别结果: {text}", indent=0)
         
@@ -815,6 +828,11 @@ class DialogueManager:
                         self._limit_history_length()
                     
                     log_info("MANAGER", f"[HISTORY_CHECK-011] 对话历史记录完成（播放时长: {played_duration:.2f}秒，历史记录总数: {len(self.conversation_history)}）", indent=1)
+                    
+                    # 任务被打断但已记录到对话历史，清空累积输入（避免已处理的输入在后续合并中被重复使用）
+                    if self.accumulated_input:
+                        log_info("MANAGER", f"[HISTORY_CHECK-011] 清空累积输入（打断但已记录）: '{self.accumulated_input}'", indent=2)
+                        self.accumulated_input = ""
                     
                     # 设置标记，避免播放线程重复记录
                     log_info("MANAGER", f"[HISTORY_CHECK-012] 准备设置历史记录标记 history_recorded_by_interrupt=True", indent=1)
@@ -1422,8 +1440,30 @@ class DialogueManager:
     
     def _on_vad_speech_start(self):
         """VAD检测到语音开始回调（由线程2调用）"""
+        # 首先检查ASR线程是否在运行（无论当前状态如何，避免重复启动）
+        with self.asr_thread_lock:
+            asr_thread_info = self.thread_manager.get_thread_info("ASR-Recognition")
+            asr_thread_alive = asr_thread_info and asr_thread_info.is_alive and asr_thread_info.thread.is_alive()
+            asr_recognizing = False
+            if self.asr and hasattr(self.asr, 'state_lock') and hasattr(self.asr, 'recognizing'):
+                with self.asr.state_lock:
+                    asr_recognizing = self.asr.recognizing
+        
+        log_debug("MANAGER", f"检测到语音开始，ASR线程状态: 线程存活={asr_thread_alive}, 识别中={asr_recognizing}", indent=1)
+        
+        if asr_thread_alive and asr_recognizing:
+            log_debug("MANAGER", "ASR线程正在运行，不重复启动", indent=0)
+            return
+        
         main_state = self.state_manager.get_main_state()
         sub_state = self.state_manager.get_sub_state()
+        
+        # 如果主系统状态为LISTENING且ASR线程不在运行，可能是异常情况，恢复状态
+        if main_state == MainSystemState.LISTENING and not (asr_thread_alive and asr_recognizing):
+            log_warn("MANAGER", "状态为LISTENING但ASR线程未运行，重置状态为IDLE", indent=0)
+            self.state_manager.transition_main_state(MainSystemState.IDLE, "ASR线程未运行，恢复IDLE状态")
+            # 更新main_state，因为状态已改变
+            main_state = MainSystemState.IDLE
         
         # 检查是否可以启动ASR
         # 主系统状态为IDLE、ROBOT_SPEAKING时，或副系统状态为PROCESSING、SPEAKING、PAUSED时
@@ -1432,34 +1472,15 @@ class DialogueManager:
             sub_state in [SubSystemState.PROCESSING, SubSystemState.SPEAKING, SubSystemState.PAUSED]
         )
         
-        # 如果主系统状态为LISTENING，检查ASR线程是否真的在运行
-        if main_state == MainSystemState.LISTENING:
-            # 检查ASR线程是否真的在运行
-            with self.asr_thread_lock:
-                asr_thread_info = self.thread_manager.get_thread_info("ASR-Recognition")
-                asr_thread_alive = asr_thread_info and asr_thread_info.is_alive and asr_thread_info.thread.is_alive()
-                asr_recognizing = False
-                if self.asr and hasattr(self.asr, 'state_lock') and hasattr(self.asr, 'recognizing'):
-                    with self.asr.state_lock:
-                        asr_recognizing = self.asr.recognizing
-            
-            if asr_thread_alive and asr_recognizing:
-                log_debug("MANAGER", "已在监听中，ASR线程正在运行，不重复启动", indent=0)
-                return
-            else:
-                # ASR线程已结束或未在识别，但状态还是LISTENING，需要恢复状态
-                log_warn("MANAGER", f"状态为LISTENING但ASR线程未运行（线程存活: {asr_thread_alive}, 识别中: {asr_recognizing}），重置状态为IDLE", indent=0)
-                self.state_manager.transition_main_state(MainSystemState.IDLE, "ASR线程已结束，恢复IDLE状态")
-                # 继续执行，启动新的ASR线程
-        
         if not can_start_asr:
             log_debug("MANAGER", f"当前状态不允许启动ASR: 主系统={main_state.value}, 副系统={sub_state.value}", indent=0)
             return
         
         log_info("MANAGER", "检测到语音开始", indent=0)
-        
-        # 更新last_active_time
+
+        # 更新last_active_time（VAD检测到语音活动时立即更新，不受check_interval影响）
         self.last_active_time = time.time()
+        log_debug("MANAGER", f"VAD检测到语音开始，更新last_active_time={self.last_active_time:.3f}", indent=1)
         
         # 场景1特殊处理: 如果主系统状态为IDLE且副系统状态为None，这是正常对话流程，不触发打断逻辑
         if main_state == MainSystemState.IDLE and sub_state == SubSystemState.NONE:
@@ -1493,12 +1514,18 @@ class DialogueManager:
         # 启动ASR线程（线程4）
         self._start_asr_thread()
     
+    def _on_vad_speech_active(self):
+        """VAD持续检测到语音活动回调（由线程2调用）"""
+        # 持续更新last_active时间，防止误判用户停止说话
+        self.last_active_time = time.time()
+        log_debug("MANAGER", f"VAD持续语音活动，更新last_active_time={self.last_active_time:.3f}", indent=1)
+
     def _on_vad_speech_end(self):
         """VAD检测到语音结束回调（由线程2调用）"""
         log_debug("MANAGER", "检测到语音结束", indent=0)
         # 注意：VAD_SPEECH_END事件已由VAD模块发送，PerformanceMonitor会处理
         # 注意：ASR的结束不是由VAD直接控制，而是由NO_SPEECH_THRESHOLD控制
-        
+
         # 重置性能计时器（清除之前的所有时间戳）
         # 然后记录VAD结束时间作为新的起点
         log_info("MANAGER", "[PERF_TIMER] VAD结束，重置性能计时器并记录VAD结束时间", indent=1)
@@ -1512,9 +1539,6 @@ class DialogueManager:
                 log_info("TIME", "VAD检测的记录VAD结束时间", indent=1)
                 self.performance_timer.record_vad_speech_end()
         
-        # 通知ASR模块VAD已结束（如果支持）
-        if self.asr and hasattr(self.asr, 'set_vad_ended'):
-            self.asr.set_vad_ended(True)
     
     def _on_asr_partial_result(self, event):
         """
@@ -1618,16 +1642,42 @@ class DialogueManager:
     
     def _start_asr_thread(self):
         """启动ASR识别线程（线程4）"""
+        # 记录当前状态（用于调试）
+        main_state = self.state_manager.get_main_state()
+        sub_state = self.state_manager.get_sub_state()
+        log_info("MANAGER", f"启动ASR线程，当前状态: main={main_state.value}, sub={sub_state.value}", indent=1)
+        
         with self.asr_thread_lock:
             # 检查ASR线程是否已在运行
             asr_thread_info = self.thread_manager.get_thread_info("ASR-Recognition")
-            if asr_thread_info and asr_thread_info.is_alive and asr_thread_info.thread.is_alive():
-                # 检查ASR是否真的在识别
-                if self.asr and hasattr(self.asr, 'state_lock') and hasattr(self.asr, 'recognizing'):
-                    with self.asr.state_lock:
-                        if self.asr.recognizing:
-                            log_debug("MANAGER", "ASR线程已在运行且正在识别", indent=0)
-                            return
+            if asr_thread_info:
+                # 检查线程是否真的还在运行（不等待，直接检查）
+                thread_actually_alive = asr_thread_info.thread.is_alive() if asr_thread_info.thread else False
+                thread_info_is_alive = asr_thread_info.is_alive
+                thread_id = asr_thread_info.thread.ident if asr_thread_info.thread else None
+                
+                log_info("MANAGER", f"检查ASR线程状态: thread_info.is_alive={thread_info_is_alive}, thread.is_alive()={thread_actually_alive}, thread_id={thread_id}", indent=1)
+                
+                if thread_actually_alive:
+                    # 线程实际还在运行，检查ASR是否真的在识别
+                    asr_recognizing = False
+                    if self.asr and hasattr(self.asr, 'state_lock') and hasattr(self.asr, 'recognizing'):
+                        with self.asr.state_lock:
+                            asr_recognizing = self.asr.recognizing
+                    
+                    log_info("MANAGER", f"ASR状态检查: recognizing={asr_recognizing}", indent=1)
+                    
+                    if asr_recognizing:
+                        log_info("MANAGER", "ASR线程已在运行且正在识别，跳过启动", indent=1)
+                        return
+                    else:
+                        # 线程还在运行但ASR不在识别，说明线程可能正在清理中
+                        # 允许启动新线程，ThreadManager会处理冲突（如果线程真的还在运行会抛出异常）
+                        log_info("MANAGER", "ASR线程还在运行但ASR不在识别，可能是清理中，尝试启动新线程", indent=1)
+                else:
+                    # 线程已结束，但记录可能还在
+                    # ThreadManager会在start_thread时自动清理，无需等待
+                    log_info("MANAGER", "检测到已结束的ASR线程记录，ThreadManager将自动清理", indent=1)
             
             # 递增ASR任务ID
             self.asr_task_id += 1
@@ -1660,9 +1710,17 @@ class DialogueManager:
                         return
                     
                     # 等待ASR识别完成
-                    # 在等待期间，定期检查任务是否被取消
+                    # 在等待期间，定期检查任务是否被取消或系统是否停止
                     check_interval = 0.1  # 100ms检查一次
                     while True:
+                        # 检查系统是否停止
+                        if not self.running:
+                            log_info("MANAGER", f"系统已停止，退出ASR识别线程（任务ID: {current_asr_task_id}）", indent=0)
+                            # 停止ASR识别
+                            if self.asr and hasattr(self.asr, 'stop_recognition'):
+                                self.asr.stop_recognition()
+                            return
+                        
                         # 检查任务是否被取消
                         if current_asr_task_id != self.asr_task_id:
                             log_warn("MANAGER", f"ASR任务 {current_asr_task_id} 在识别过程中被取消（当前任务ID: {self.asr_task_id}）", indent=0)
@@ -1700,14 +1758,28 @@ class DialogueManager:
                     log_info("MANAGER", f"ASR识别线程结束（任务ID: {current_asr_task_id}）", indent=0)
             
             # 启动ASR识别线程
-            self.thread_manager.start_thread(
-                name="ASR-Recognition",
-                target=asr_recognition_thread,
-                context=None,
-                thread_type="on_demand",
-                daemon=True
-            )
-            log_info("MANAGER", f"启动ASR识别线程（任务ID: {current_asr_task_id}）", indent=0)
+            try:
+                self.thread_manager.start_thread(
+                    name="ASR-Recognition",
+                    target=asr_recognition_thread,
+                    context=None,
+                    thread_type="on_demand",
+                    daemon=True
+                )
+                log_info("MANAGER", f"启动ASR识别线程（任务ID: {current_asr_task_id}）", indent=0)
+            except ValueError as e:
+                # ThreadManager检测到线程冲突
+                log_error("MANAGER", f"启动ASR识别线程失败: {e}", indent=0)
+                # 再次检查线程状态
+                asr_thread_info = self.thread_manager.get_thread_info("ASR-Recognition")
+                if asr_thread_info:
+                    thread_actually_alive = asr_thread_info.thread.is_alive() if asr_thread_info.thread else False
+                    asr_recognizing = False
+                    if self.asr and hasattr(self.asr, 'state_lock') and hasattr(self.asr, 'recognizing'):
+                        with self.asr.state_lock:
+                            asr_recognizing = self.asr.recognizing
+                    log_error("MANAGER", f"线程冲突详情: thread.is_alive()={thread_actually_alive}, ASR.recognizing={asr_recognizing}", indent=1)
+                return
             
             # 等待一小段时间，确认线程启动成功
             time.sleep(0.05)  # 50ms，给线程启动时间
@@ -2034,6 +2106,10 @@ class DialogueManager:
                         self._limit_history_length()
                     
                     log_info("MANAGER", f"任务取消时已记录对话历史（播放时长: {played_duration:.2f}秒）", indent=1)
+                    # 任务被打断但已记录到对话历史，清空累积输入（避免已处理的输入在后续合并中被重复使用）
+                    if self.accumulated_input:
+                        log_info("MANAGER", f"清空累积输入（任务打断但已记录）: '{self.accumulated_input}'", indent=1)
+                        self.accumulated_input = ""
         # 如果副系统状态为 PROCESSING，说明还未开始播放，不需要记录历史
         
         log_info("MANAGER", f"任务已取消: ID={current_context.task_id}", indent=0)
@@ -2516,6 +2592,10 @@ class DialogueManager:
                         self._limit_history_length()
                     
                     log_info("MANAGER", f"对话历史已记录（播放时长: {played_duration:.2f}秒）", indent=0)
+                    # 任务成功完成并记录到对话历史，清空累积输入（避免已处理的输入在后续合并中被重复使用）
+                    if self.accumulated_input:
+                        log_info("MANAGER", f"清空累积输入（任务完成）: '{self.accumulated_input}'", indent=1)
+                        self.accumulated_input = ""
                 
                 # 发布任务完成事件
                 completed_event = create_event(
