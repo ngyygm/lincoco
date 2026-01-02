@@ -189,7 +189,7 @@ class Config:
             "sequence_diagram_flow_timeout": 30.0,  # 流程超时时间（秒），超过此时间自动结束流程记录（EventLogger用）
             # 日志过滤配置（黑名单模式）
             "filtered_levels": [],  # 被过滤的日志级别列表（如 ["DEBUG"]），这些级别的日志将不输出
-            "filtered_categories": ["THREAD", "EVENT", "MIC", "TIME", "MANAGER"],  # 被过滤的日志类别列表（如 ["THREAD", "EVENT", "MANAGER", "VAD", "CTX", "MIC"]），这些类别的日志将不输出
+            "filtered_categories": ["THREAD", "EVENT", "MIC", "TIME"],  # 被过滤的日志类别列表（如 ["THREAD", "EVENT", "MANAGER", "VAD", "CTX", "MIC"]），这些类别的日志将不输出
             # 日志类别专属颜色配置（字典格式：{"CATEGORY": "COLOR_NAME"}，如 {"ASR": "GREEN", "LLM": "CYAN"}）
             # 支持的颜色名称：BLACK, RED, GREEN, YELLOW, BLUE, MAGENTA, CYAN, WHITE,
             # BRIGHT_BLACK, BRIGHT_RED, BRIGHT_GREEN, BRIGHT_YELLOW, BRIGHT_BLUE, BRIGHT_MAGENTA, BRIGHT_CYAN, BRIGHT_WHITE

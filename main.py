@@ -123,6 +123,7 @@ def start_melo_tts_api(config: Config):
         
         melo_tts_config = tts_config.get("engines", {}).get("melo_tts", {})
         api_url = melo_tts_config.get("api_url", "http://127.0.0.1:8101")
+        model_language = melo_tts_config.get("model_language", "ZH")
         
         # 解析 API URL 获取端口
         parsed_url = urlparse(api_url)
@@ -134,6 +135,33 @@ def start_melo_tts_api(config: Config):
             # 检查是否是 MeloTTS API 服务
             if check_melo_tts_api(port):
                 log_info("MAIN", f"MeloTTS API 服务已在运行 (端口 {port})", indent=1)
+                # 即使服务已在运行，也尝试预加载模型（如果模型未加载或语言不匹配）
+                log_info("MAIN", f"检查并预加载 MeloTTS 模型 (语言: {model_language})...", indent=1)
+                try:
+                    # 先检查模型是否已加载
+                    speakers_response = requests.get(f"http://127.0.0.1:{port}/speakers", timeout=5)
+                    if speakers_response.status_code == 200:
+                        log_info("MAIN", "模型已加载，无需重新加载", indent=2)
+                    else:
+                        # 模型未加载，尝试加载
+                        log_info("MAIN", "模型未加载，开始加载...", indent=2)
+                        init_response = requests.post(
+                            f"http://127.0.0.1:{port}/init",
+                            json={
+                                "language": model_language,
+                                "device": "auto",
+                                "use_hf": True
+                            },
+                            timeout=60
+                        )
+                        if init_response.status_code == 200:
+                            init_result = init_response.json()
+                            if init_result.get("success", False):
+                                log_info("MAIN", f"模型加载成功: {init_result.get('message', '')}", indent=2)
+                            else:
+                                log_warn("MAIN", f"模型加载失败: {init_result.get('message', '未知错误')}", indent=2)
+                except Exception as e:
+                    log_warn("MAIN", f"检查/加载模型时出错: {e}，模型将在首次使用时加载", indent=2)
                 return None
             else:
                 log_warn("MAIN", f"端口 {port} 被占用，但不是 MeloTTS API 服务，跳过启动", indent=1)
@@ -191,6 +219,33 @@ def start_melo_tts_api(config: Config):
                 response = requests.get(f"http://127.0.0.1:{port}/docs", timeout=2)
                 if response.status_code == 200:
                     log_info("MAIN", f"MeloTTS API 服务启动成功 (端口 {port})", indent=1)
+                    
+                    # 服务启动后，预加载配置中指定的模型
+                    model_language = melo_tts_config.get("model_language", "ZH")
+                    log_info("MAIN", f"预加载 MeloTTS 模型 (语言: {model_language})...", indent=1)
+                    try:
+                        init_response = requests.post(
+                            f"http://127.0.0.1:{port}/init",
+                            json={
+                                "language": model_language,
+                                "device": "auto",
+                                "use_hf": True
+                            },
+                            timeout=60  # 模型加载可能需要较长时间
+                        )
+                        if init_response.status_code == 200:
+                            init_result = init_response.json()
+                            if init_result.get("success", False):
+                                log_info("MAIN", f"模型预加载成功: {init_result.get('message', '')}", indent=2)
+                            else:
+                                log_warn("MAIN", f"模型预加载失败: {init_result.get('message', '未知错误')}", indent=2)
+                        else:
+                            log_warn("MAIN", f"模型预加载请求失败: HTTP {init_response.status_code}", indent=2)
+                    except requests.exceptions.Timeout:
+                        log_warn("MAIN", "模型预加载超时（60秒），但服务已启动，模型将在首次使用时加载", indent=2)
+                    except Exception as e:
+                        log_warn("MAIN", f"模型预加载出错: {e}，但服务已启动，模型将在首次使用时加载", indent=2)
+                    
                     return melo_tts_process
             except:
                 pass

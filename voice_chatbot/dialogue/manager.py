@@ -994,24 +994,55 @@ class DialogueManager:
                         # 副系统状态: PAUSED → NONE
                         self.state_manager.transition_sub_state(SubSystemState.NONE, "ASR验证失败但播放器已停止")
             elif sub_state == SubSystemState.PROCESSING and main_state == MainSystemState.LISTENING:
-                # 场景5: PROCESSING + LISTENING状态，取消当前任务
-                log_info("MANAGER", "场景5: 无效输入，PROCESSING + LISTENING状态，取消任务", indent=0)
-                # 取消当前任务
-                self._cancel_current_task()
-                
-                # 清除打断相关标记
-                log_info("MANAGER", "[LOCK-005] _handle_asr_result() 场景5-无效输入 正在获取 interrupt_lock", indent=0)
-                with self.interrupt_lock:
-                    self.pending_interrupt = False
-                self.paused_sub_state = None
-                self.nothing_said_yet = False
-                
-                # 场景5特殊处理：无效输入时，副系统状态应该直接恢复为None
-                current_sub_state = self.state_manager.get_sub_state()
-                if current_sub_state == SubSystemState.PAUSED:
-                    self.state_manager.transition_sub_state(SubSystemState.NONE, "无效输入，取消任务")
-                # 确保主系统状态也更新为IDLE
-                self.state_manager.transition_main_state(MainSystemState.IDLE, "无效输入，取消任务")
+                # 场景5: PROCESSING + LISTENING状态
+                # 如果识别结果为0个字符（空字符串），判断为误识别，恢复PROCESSING状态继续处理
+                if not text or not text.strip():
+                    log_info("MANAGER", "场景5: 无效输入（0个字符），PROCESSING + LISTENING状态，判断为误识别，恢复PROCESSING状态继续处理", indent=0)
+                    
+                    # 发布打断取消事件（误判）
+                    if self.event_bus:
+                        current_task_id = self.context_manager.get_current_task_id()
+                        event = create_event(
+                            EventType.INTERRUPT_CANCELLED,
+                            data={
+                                "task_id": current_task_id,
+                                "previous_state": "processing",
+                                "reason": "invalid_input_empty"
+                            },
+                            source="DialogueManager"
+                        )
+                        self.event_bus.publish(event)
+                    
+                    # 清除所有打断相关标记
+                    log_info("MANAGER", "[LOCK-005] _handle_asr_result() 场景5-误识别恢复 正在获取 interrupt_lock", indent=0)
+                    with self.interrupt_lock:
+                        self.pending_interrupt = False
+                    self.paused_sub_state = None
+                    self.nothing_said_yet = False
+                    
+                    # 主系统状态: LISTENING → IDLE
+                    self.state_manager.transition_main_state(MainSystemState.IDLE, "ASR验证失败（误判，0字符），恢复正常状态")
+                    # 副系统状态: PROCESSING → PROCESSING（保持不变，继续处理）
+                    # 注意：这里不需要转换状态，因为已经是PROCESSING状态，只需要清除打断标记即可
+                else:
+                    # 其他无效输入（非空但无效），取消当前任务
+                    log_info("MANAGER", "场景5: 无效输入（非空但无效），PROCESSING + LISTENING状态，取消任务", indent=0)
+                    # 取消当前任务
+                    self._cancel_current_task()
+                    
+                    # 清除打断相关标记
+                    log_info("MANAGER", "[LOCK-005] _handle_asr_result() 场景5-无效输入 正在获取 interrupt_lock", indent=0)
+                    with self.interrupt_lock:
+                        self.pending_interrupt = False
+                    self.paused_sub_state = None
+                    self.nothing_said_yet = False
+                    
+                    # 场景5特殊处理：无效输入时，副系统状态应该直接恢复为None
+                    current_sub_state = self.state_manager.get_sub_state()
+                    if current_sub_state == SubSystemState.PAUSED:
+                        self.state_manager.transition_sub_state(SubSystemState.NONE, "无效输入，取消任务")
+                    # 确保主系统状态也更新为IDLE
+                    self.state_manager.transition_main_state(MainSystemState.IDLE, "无效输入，取消任务")
             else:
                 # 其他情况（包括普通LISTENING状态），也需要恢复为IDLE
                 log_info("MANAGER", "无效输入，恢复IDLE状态", indent=0)
