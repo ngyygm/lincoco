@@ -102,6 +102,8 @@ htmlcov/
 .dmypy.json
 dmypy.json
 
-# Third-party repositories (use submodules if needed)
-MeloTTS/
+# MeloTTS 相关文件（忽略下载缓存和输出文件）
+MeloTTS/hf_download/
+MeloTTS/out/
+MeloTTS/.git/
 

@@ -9,7 +9,13 @@
 import sys
 import signal
 import argparse
+import subprocess
+import time
+import requests
+import os
+import socket
 from pathlib import Path
+from urllib.parse import urlparse
 
 # 添加项目根目录到Python路径
 project_root = Path(__file__).parent
@@ -21,6 +27,46 @@ from voice_chatbot.dialogue import DialogueManager
 
 # 全局变量，用于信号处理
 dialogue_manager = None
+melo_tts_process = None
+
+
+def is_port_in_use(port: int, host: str = "127.0.0.1") -> bool:
+    """
+    检查端口是否被占用
+    
+    Args:
+        port: 端口号
+        host: 主机地址，默认为 127.0.0.1
+        
+    Returns:
+        bool: 如果端口被占用返回 True，否则返回 False
+    """
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.settimeout(1)
+            result = s.connect_ex((host, port))
+            return result == 0
+    except Exception:
+        return False
+
+
+def check_melo_tts_api(port: int) -> bool:
+    """
+    检查指定端口是否运行着 MeloTTS API 服务
+    
+    Args:
+        port: 端口号
+        
+    Returns:
+        bool: 如果是 MeloTTS API 服务返回 True，否则返回 False
+    """
+    try:
+        response = requests.get(f"http://127.0.0.1:{port}/docs", timeout=2)
+        if response.status_code == 200:
+            return True
+    except:
+        pass
+    return False
 
 
 def signal_handler(signum, frame):
@@ -31,18 +77,158 @@ def signal_handler(signum, frame):
         signum: 信号编号
         frame: 当前堆栈帧
     """
+    global melo_tts_process
     log_info("MAIN", f"收到信号 {signum}，正在关闭系统...", indent=0)
     if dialogue_manager:
         try:
             dialogue_manager.stop()
         except Exception as e:
             log_error("MAIN", f"关闭系统时出错: {e}", indent=1)
+    
+    # 关闭 MeloTTS API 服务进程
+    if melo_tts_process:
+        try:
+            log_info("MAIN", "正在关闭 MeloTTS API 服务...", indent=0)
+            melo_tts_process.terminate()
+            melo_tts_process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            log_warn("MAIN", "MeloTTS API 服务未响应，强制终止...", indent=1)
+            melo_tts_process.kill()
+        except Exception as e:
+            log_error("MAIN", f"关闭 MeloTTS API 服务时出错: {e}", indent=1)
+    
     sys.exit(0)
+
+
+def start_melo_tts_api(config: Config):
+    """
+    启动 MeloTTS API 服务
+    
+    Args:
+        config: 配置对象
+        
+    Returns:
+        subprocess.Popen: 进程对象，如果启动失败返回 None
+    """
+    global melo_tts_process
+    
+    try:
+        # 获取 MeloTTS 配置
+        tts_config = config["tts"]
+        default_engine = tts_config.get("default_engine", "edgetts")
+        
+        # 检查是否使用 MeloTTS
+        if default_engine.lower() != "melotts":
+            return None
+        
+        melo_tts_config = tts_config.get("engines", {}).get("melo_tts", {})
+        api_url = melo_tts_config.get("api_url", "http://127.0.0.1:8101")
+        
+        # 解析 API URL 获取端口
+        parsed_url = urlparse(api_url)
+        port = parsed_url.port or 8101
+        
+        # 先检查端口是否被占用
+        if is_port_in_use(port):
+            log_info("MAIN", f"端口 {port} 已被占用，检查是否为 MeloTTS API 服务...", indent=0)
+            # 检查是否是 MeloTTS API 服务
+            if check_melo_tts_api(port):
+                log_info("MAIN", f"MeloTTS API 服务已在运行 (端口 {port})", indent=1)
+                return None
+            else:
+                log_warn("MAIN", f"端口 {port} 被占用，但不是 MeloTTS API 服务，跳过启动", indent=1)
+                log_warn("MAIN", "请手动检查端口占用情况或更改配置中的端口号", indent=1)
+                return None
+        else:
+            log_info("MAIN", f"端口 {port} 未被占用，准备启动 MeloTTS API 服务", indent=0)
+        
+        log_info("MAIN", f"正在启动 MeloTTS API 服务 (端口 {port})...", indent=0)
+        
+        # 获取 MeloTTS 目录路径
+        melotts_dir = project_root / "MeloTTS"
+        if not melotts_dir.exists():
+            log_error("MAIN", f"MeloTTS 目录不存在: {melotts_dir}", indent=1)
+            return None
+        
+        api_py_path = melotts_dir / "api.py"
+        if not api_py_path.exists():
+            log_error("MAIN", f"MeloTTS API 文件不存在: {api_py_path}", indent=1)
+            return None
+        
+        # 设置环境变量（从 start-api-backend.bat 中提取）
+        env = os.environ.copy()
+        env["HF_ENDPOINT"] = "https://hf-mirror.com"
+        env["HF_HOME"] = str(melotts_dir / "hf_download")
+        
+        # 启动 API 服务
+        # 使用 uvicorn 直接运行，而不是通过 bat 文件
+        if sys.platform == "win32":
+            # Windows: 在新控制台窗口中运行，方便查看日志
+            melo_tts_process = subprocess.Popen(
+                [sys.executable, "-m", "uvicorn", "api:app", "--host", "0.0.0.0", "--port", str(port)],
+                cwd=str(melotts_dir),
+                env=env,
+                creationflags=subprocess.CREATE_NEW_CONSOLE
+            )
+        else:
+            # Linux/Mac: 在后台运行，捕获输出用于错误诊断
+            melo_tts_process = subprocess.Popen(
+                [sys.executable, "-m", "uvicorn", "api:app", "--host", "0.0.0.0", "--port", str(port)],
+                cwd=str(melotts_dir),
+                env=env,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE
+            )
+        
+        # 等待服务启动
+        log_info("MAIN", "等待 MeloTTS API 服务启动...", indent=1)
+        max_wait_time = 30  # 最多等待30秒
+        check_interval = 0.5  # 每0.5秒检查一次
+        waited_time = 0
+        
+        while waited_time < max_wait_time:
+            try:
+                response = requests.get(f"http://127.0.0.1:{port}/docs", timeout=2)
+                if response.status_code == 200:
+                    log_info("MAIN", f"MeloTTS API 服务启动成功 (端口 {port})", indent=1)
+                    return melo_tts_process
+            except:
+                pass
+            
+            # 检查进程是否还在运行
+            if melo_tts_process.poll() is not None:
+                # 进程已退出，读取错误信息
+                stdout, stderr = melo_tts_process.communicate()
+                error_msg = stderr.decode('utf-8', errors='ignore') if stderr else "未知错误"
+                log_error("MAIN", f"MeloTTS API 服务启动失败: {error_msg}", indent=1)
+                melo_tts_process = None
+                return None
+            
+            time.sleep(check_interval)
+            waited_time += check_interval
+        
+        log_error("MAIN", f"MeloTTS API 服务启动超时（等待 {max_wait_time} 秒）", indent=1)
+        if melo_tts_process:
+            melo_tts_process.terminate()
+            melo_tts_process = None
+        return None
+        
+    except Exception as e:
+        log_error("MAIN", f"启动 MeloTTS API 服务时出错: {e}", indent=1)
+        import traceback
+        log_error("MAIN", f"异常堆栈:\n{traceback.format_exc()}", indent=1)
+        if melo_tts_process:
+            try:
+                melo_tts_process.terminate()
+            except:
+                pass
+            melo_tts_process = None
+        return None
 
 
 def main():
     """主函数"""
-    global dialogue_manager
+    global dialogue_manager, melo_tts_process
     
     # 解析命令行参数
     parser = argparse.ArgumentParser(
@@ -108,6 +294,11 @@ def main():
         # 更新 Logger 的类别颜色配置（从配置读取）
         update_logger_category_colors(config)
         
+        # 如果使用 MeloTTS，先启动 API 服务
+        melo_tts_process = start_melo_tts_api(config)
+        if melo_tts_process is None and config["tts"].get("default_engine", "").lower() == "melotts":
+            log_warn("MAIN", "MeloTTS API 服务启动失败，但继续运行主程序（如果服务已在运行则忽略此警告）", indent=0)
+        
         # 创建DialogueManager实例
         log_info("MAIN", "初始化DialogueManager...", indent=0)
         global dialogue_manager
@@ -156,6 +347,18 @@ def main():
         
         sys.exit(1)
     finally:
+        # 确保清理 MeloTTS API 服务进程
+        # 注意：melo_tts_process 已在 main() 函数开头声明为 global
+        if melo_tts_process:
+            try:
+                log_info("MAIN", "正在关闭 MeloTTS API 服务...", indent=0)
+                melo_tts_process.terminate()
+                melo_tts_process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                log_warn("MAIN", "MeloTTS API 服务未响应，强制终止...", indent=1)
+                melo_tts_process.kill()
+            except Exception as e:
+                log_error("MAIN", f"关闭 MeloTTS API 服务时出错: {e}", indent=1)
         log_info("MAIN", "程序退出", indent=0)
 
 

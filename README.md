@@ -75,6 +75,8 @@ conda activate voice
 python main.py
 ```
 
+**注意**：如果配置中选择了 MeloTTS 引擎，程序会自动启动 MeloTTS API 服务（默认端口 8101）。如果端口已被占用或服务已在运行，程序会检测并使用现有服务。
+
 ## 📁 项目结构
 
 ```
@@ -228,9 +230,10 @@ dialogue.audio_stop_delay = 0.3       # 打断延迟验证时间（秒）
 
 - 项目中的 `tts_cache/` 目录包含大量音频缓存文件，已配置 `.gitignore` 忽略音频文件，但保留 `_index.json` 索引文件
 - `MeloTTS/` 目录是独立的 git 仓库，不会被提交到主仓库（如需使用，请单独克隆或作为子模块添加）
+- `MeloTTS/hf_download/` 目录包含 Hugging Face 模型下载缓存，不会被提交到 Git
 - 日志文件保存在 `logs/` 目录，不会被提交到 Git
 - 请确保正确配置环境变量（如 OpenAI API Key）
-- 使用 MeloTTS 引擎时，需要先启动 MeloTTS API 服务（默认地址：http://127.0.0.1:8101）
+- **MeloTTS 自动启动**：如果配置中选择了 MeloTTS 引擎，程序会在启动时自动检测端口占用情况并启动 API 服务，无需手动运行 `start-api-backend.bat`
 
 ## 🔗 相关链接
 
@@ -243,3 +246,9 @@ dialogue.audio_stop_delay = 0.3       # 打断延迟验证时间（秒）
 
 **最后更新**: 2026-01-03  
 **维护者**: ngyygm
+
+## 🆕 最新更新
+
+- ✨ **MeloTTS 自动启动**：程序启动时自动检测并启动 MeloTTS API 服务，无需手动操作
+- 🚀 **端口智能检测**：自动检测端口占用情况，避免重复启动服务
+- 💾 **内存优化**：MeloTTS API 不再保存临时文件到磁盘，所有音频数据在内存中处理
