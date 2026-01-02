@@ -75,7 +75,10 @@ conda activate voice
 python main.py
 ```
 
-**注意**：如果配置中选择了 MeloTTS 引擎，程序会自动启动 MeloTTS API 服务（默认端口 8101）。如果端口已被占用或服务已在运行，程序会检测并使用现有服务。
+**注意**：
+- 如果配置中选择了 MeloTTS 引擎，程序会自动启动 MeloTTS API 服务（默认端口 8101）
+- 如果端口已被占用或服务已在运行，程序会检测并使用现有服务
+- **模型预加载**：服务启动后会自动预加载配置中指定的模型语言，减少首次请求延迟
 
 ## 📁 项目结构
 
@@ -143,6 +146,10 @@ llm.temperature = 0.7                 # 生成温度
 tts.engine = "melotts"                 # TTS引擎：edgetts、cosyvoice3 或 melotts
 tts.tts_file_cache_enabled = True     # 启用TTS文件缓存
 tts.enable_trim_silence = True        # 启用静音裁剪
+
+# MeloTTS 特定配置
+tts.engines.melo_tts.model_language = "ZH"  # 模型语言：ZH=中文, EN=英文, JP=日文等
+tts.engines.melo_tts.api_url = "http://127.0.0.1:8101"  # API 服务地址
 ```
 
 #### 对话参数
@@ -173,6 +180,7 @@ dialogue.audio_stop_delay = 0.3       # 打断延迟验证时间（秒）
 
 - **延迟验证**：检测到语音后延迟验证，避免误判
 - **ASR 验证**：暂停后通过 ASR 验证是否为有效输入
+- **误识别处理**：当 ASR 识别结果为 0 个字符时，自动判断为误识别，继续 LLM+TTS 处理，不中断当前任务
 - **状态管理**：精确的状态转换和任务取消机制
 
 ### 4. 人设系统
@@ -234,6 +242,8 @@ dialogue.audio_stop_delay = 0.3       # 打断延迟验证时间（秒）
 - 日志文件保存在 `logs/` 目录，不会被提交到 Git
 - 请确保正确配置环境变量（如 OpenAI API Key）
 - **MeloTTS 自动启动**：如果配置中选择了 MeloTTS 引擎，程序会在启动时自动检测端口占用情况并启动 API 服务，无需手动运行 `start-api-backend.bat`
+- **MeloTTS 模型预加载**：服务启动后自动预加载配置中指定的模型语言，避免首次请求时的模型加载延迟
+- **MeloTTS 内存优化**：API 服务不再保存临时文件到磁盘，所有音频数据在内存中处理，提高性能
 
 ## 🔗 相关链接
 
@@ -252,3 +262,6 @@ dialogue.audio_stop_delay = 0.3       # 打断延迟验证时间（秒）
 - ✨ **MeloTTS 自动启动**：程序启动时自动检测并启动 MeloTTS API 服务，无需手动操作
 - 🚀 **端口智能检测**：自动检测端口占用情况，避免重复启动服务
 - 💾 **内存优化**：MeloTTS API 不再保存临时文件到磁盘，所有音频数据在内存中处理
+- ⚡ **模型预加载**：MeloTTS 服务启动后自动预加载配置中指定的模型语言，减少首次请求延迟
+- 🎯 **误识别处理优化**：当 ASR 识别结果为 0 个字符时，自动判断为误识别，继续 LLM+TTS 处理，不中断当前任务
+- 🔧 **句子合并优化**：修复了第一句因逗号切分后，合并时丢失逗号的问题
