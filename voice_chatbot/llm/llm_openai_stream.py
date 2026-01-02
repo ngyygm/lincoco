@@ -687,6 +687,8 @@ class LLMStreamGenerator:
         accumulated_length = 0  # 累积的长度（中文等按字符数，英文等按单词数）
         batch_index = 0  # 当前批次索引（用于计算最小长度要求）
         full_response_text = ""  # 完整的回答文本
+        first_sentence_was_comma_split = False  # 记录第一句是否因为逗号切分
+        first_sentence_comma_type = "，"  # 记录第一句使用的逗号类型（中文逗号或英文逗号）
         
         # 用于处理<think>标签的状态
         in_redacted_tag = False  # 是否在<think>标签内
@@ -694,7 +696,7 @@ class LLMStreamGenerator:
         
         def check_and_flush_accumulated():
             """检查累积的句子是否达到最小长度要求，如果达到则放入队列"""
-            nonlocal accumulated_sentences, accumulated_length, batch_index, sentence_count
+            nonlocal accumulated_sentences, accumulated_length, batch_index, sentence_count, first_sentence_was_comma_split, first_sentence_comma_type
             
             # 检查任务是否被取消
             if self._check_task_cancelled(task_id):
@@ -709,13 +711,20 @@ class LLMStreamGenerator:
             # 第一句话（batch_index=0）的特殊处理：如果以逗号结尾，立即发送
             if batch_index == 0 and merged_sentence.strip():
                 # 检查最后一个字符是否是逗号
-                if re.search(r'[，,]$', merged_sentence.strip()):
+                comma_match = re.search(r'([，,])$', merged_sentence.strip())
+                if comma_match:
                     # 再次检查任务是否被取消（在回调前）
                     if self._check_task_cancelled(task_id):
                         return  # 任务已取消，不再处理
                     
+                    # 记录逗号类型（中文逗号或英文逗号）
+                    first_sentence_comma_type = comma_match.group(1)
+                    
                     # 删除末尾的逗号
                     merged_sentence = remove_trailing_comma(merged_sentence.strip())
+                    
+                    # 记录第一句是因为逗号切分的
+                    first_sentence_was_comma_split = True
                     
                     sentence_count += 1
                     # 计算从流式开始到现在的耗时
@@ -763,6 +772,16 @@ class LLMStreamGenerator:
                     if self._check_task_cancelled(task_id):
                         return
                     
+                    # 如果第一句是因为逗号切分的，且这是第二批次（batch_index == 1），需要在合并的句子前面加回逗号
+                    if first_sentence_was_comma_split and batch_index == 1:
+                        # 使用第一句的逗号类型（中文逗号或英文逗号）
+                        if merged_sentence.strip().startswith(' '):
+                            merged_sentence = first_sentence_comma_type + merged_sentence
+                        else:
+                            merged_sentence = first_sentence_comma_type + merged_sentence
+                        # 重置标志，避免后续批次重复添加逗号
+                        first_sentence_was_comma_split = False
+                    
                     sentence_count += 1
                     elapsed_from_stream = time.time() - stream_start_time
                     log_info("LLM", f"句子{sentence_count} (超过最大长度{self.max_sentence_length}，长度{accumulated_length}): {merged_sentence} [耗时: {elapsed_from_stream*1000:.1f}ms]", indent=1)
@@ -792,6 +811,17 @@ class LLMStreamGenerator:
                 
                 # 合并所有累积的句子
                 if merged_sentence.strip():
+                    # 如果第一句是因为逗号切分的，且这是第二批次（batch_index == 1），需要在合并的句子前面加回逗号
+                    if first_sentence_was_comma_split and batch_index == 1:
+                        # 使用第一句的逗号类型（中文逗号或英文逗号）
+                        # 如果合并的句子开头有空格，在空格后加逗号；否则直接在前面加逗号
+                        if merged_sentence.strip().startswith(' '):
+                            merged_sentence = first_sentence_comma_type + merged_sentence
+                        else:
+                            merged_sentence = first_sentence_comma_type + merged_sentence
+                        # 重置标志，避免后续批次重复添加逗号
+                        first_sentence_was_comma_split = False
+                    
                     sentence_count += 1
                     # 计算从流式开始到现在的耗时
                     elapsed_from_stream = time.time() - stream_start_time
