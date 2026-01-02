@@ -1513,12 +1513,37 @@ class DialogueManager:
         self.last_active_time = time.time()
         log_debug("MANAGER", f"VAD检测到语音开始，更新last_active_time={self.last_active_time:.3f}", indent=1)
         
-        # 场景1特殊处理: 如果主系统状态为IDLE且副系统状态为None，这是正常对话流程，不触发打断逻辑
+        # 场景1特殊处理: 如果主系统状态为IDLE且副系统状态为None，这是正常对话流程
+        # 但如果播放器正在播放，应该能够被打断
         if main_state == MainSystemState.IDLE and sub_state == SubSystemState.NONE:
-            log_debug("MANAGER", "场景1: 正常对话流程，不触发打断逻辑", indent=0)
-            # 直接启动ASR线程，不设置pending_interrupt
-            self._start_asr_thread()
-            return
+            # 检查播放器是否正在播放
+            is_playing = False
+            if self.audio_player:
+                is_playing = hasattr(self.audio_player, 'is_playing') and self.audio_player.is_playing()
+            
+            if is_playing:
+                # 播放器正在播放，应该能够被打断，触发打断逻辑
+                log_info("MANAGER", "场景1变体: 状态为IDLE+NONE但播放器正在播放，触发打断逻辑", indent=0)
+                # 更新主系统状态为LISTENING
+                self.state_manager.transition_main_state(MainSystemState.LISTENING, "检测到可能打断（播放中），开始监听")
+                # 更新副系统状态为SPEAKING（因为正在播放）
+                self.state_manager.transition_sub_state(SubSystemState.SPEAKING, "检测到可能打断（播放中）")
+                
+                log_info("MANAGER", "[LOCK-009] _on_vad_speech_start() 场景1变体-检测到可能打断 正在获取 interrupt_lock", indent=0)
+                with self.interrupt_lock:
+                    self.pending_interrupt = True
+                
+                # 记录新语音活动开始时间
+                self.voice_activity_start_time = time.time()
+                log_info("MANAGER", f"检测到可能打断，启动延迟验证（语音活动时间: {self.voice_activity_start_time:.3f}）", indent=0)
+                # 启动延迟验证（通过定时器）
+                self._pause_for_voice_check()
+            else:
+                # 播放器未播放，这是正常对话流程，不触发打断逻辑
+                log_debug("MANAGER", "场景1: 正常对话流程，不触发打断逻辑", indent=0)
+                # 直接启动ASR线程，不设置pending_interrupt
+                self._start_asr_thread()
+                return
         
         # 如果副系统状态为SPEAKING或PROCESSING，设置pending_interrupt并启动延迟验证（场景2和场景3）
         if sub_state in [SubSystemState.SPEAKING, SubSystemState.PROCESSING]:
