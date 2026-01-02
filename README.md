@@ -6,7 +6,7 @@
 
 - 🎤 **实时语音识别**：基于 FunASR 的流式语音识别，支持预缓存机制避免丢失开头
 - 💬 **智能对话**：集成 OpenAI API，支持流式文本生成和句子分割
-- 🔊 **语音合成**：支持 Edge TTS 和 CosyVoice3，支持流式和非流式模式
+- 🔊 **语音合成**：支持 Edge TTS、CosyVoice3 和 MeloTTS，支持流式和非流式模式
 - 🎯 **打断机制**：支持延迟验证和 ASR 验证，实现自然的对话打断
 - 📝 **对话管理**：自动管理对话历史，支持输入合并和上下文管理
 - 🎭 **人设系统**：支持多个人设配置，支持运行时动态切换
@@ -109,6 +109,7 @@ lincoco/
 │   │
 │   ├── tts/                       # TTS 模块
 │   │   ├── edge_tts_engine.py    # Edge TTS 引擎
+│   │   ├── melo_tts_engine.py    # MeloTTS 引擎
 │   │   ├── tts_file_cache.py     # TTS 文件缓存
 │   │   └── audio_player.py       # 音频播放器
 │   │
@@ -137,7 +138,7 @@ llm.temperature = 0.7                 # 生成温度
 
 #### TTS 配置
 ```python
-tts.engine = "edgetts"                # TTS引擎：edgetts 或 cosyvoice3
+tts.engine = "melotts"                 # TTS引擎：edgetts、cosyvoice3 或 melotts
 tts.tts_file_cache_enabled = True     # 启用TTS文件缓存
 tts.enable_trim_silence = True        # 启用静音裁剪
 ```
@@ -210,8 +211,10 @@ dialogue.audio_stop_delay = 0.3       # 打断延迟验证时间（秒）
 ## 📚 文档
 
 - [PROJECT_OUTLINE.md](voice_chatbot/PROJECT_OUTLINE.md) - 详细的项目架构和功能说明
+- [REALTIME_INTERACTION_DESIGN.md](voice_chatbot/REALTIME_INTERACTION_DESIGN.md) - 实时语音交互架构设计文档
 - [DEVELOPMENT_LOG.md](voice_chatbot/DEVELOPMENT_LOG.md) - 开发日志
 - [THREAD_SCHEDULING.md](voice_chatbot/THREAD_SCHEDULING.md) - 线程调度架构说明
+- [PERSONA_GUIDE.md](voice_chatbot/llm/PERSONA_GUIDE.md) - 人设系统使用指南
 
 ## 🤝 贡献
 
@@ -224,16 +227,19 @@ dialogue.audio_stop_delay = 0.3       # 打断延迟验证时间（秒）
 ## ⚠️ 注意事项
 
 - 项目中的 `tts_cache/` 目录包含大量音频缓存文件，已配置 `.gitignore` 忽略音频文件，但保留 `_index.json` 索引文件
+- `MeloTTS/` 目录是独立的 git 仓库，不会被提交到主仓库（如需使用，请单独克隆或作为子模块添加）
 - 日志文件保存在 `logs/` 目录，不会被提交到 Git
 - 请确保正确配置环境变量（如 OpenAI API Key）
+- 使用 MeloTTS 引擎时，需要先启动 MeloTTS API 服务（默认地址：http://127.0.0.1:8101）
 
 ## 🔗 相关链接
 
 - [FunASR](https://github.com/alibaba-damo-academy/FunASR) - 语音识别框架
 - [Edge TTS](https://github.com/rany2/edge-tts) - 语音合成服务
+- [MeloTTS](https://github.com/myshell-ai/MeloTTS) - 高质量多语言语音合成
 - [OpenAI API](https://platform.openai.com/docs) - 大语言模型 API
 
 ---
 
-**最后更新**: 2025-01-XX  
-**维护者**: [您的名字]
+**最后更新**: 2026-01-03  
+**维护者**: ngyygm
