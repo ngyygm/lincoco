@@ -218,11 +218,10 @@ class DialogueManager:
         self.asr_thread_lock = threading.Lock()
         self.asr_task_id = 0  # ASR任务ID（独立于主任务ID）
         
-        # 快速连续输入相关
-        self.accumulated_input = ""  # 累积的用户输入（支持多次合并）
-        self.voice_activity_start_time = 0.0  # 新语音活动检测到的时间点（用于判断"什么都没说过"）
-        self.nothing_said_yet = False  # 标记当前任务是否被判定为"什么都没说过"
-        
+        # TTS播放文本实时跟踪（用于记录对话历史）
+        self.current_played_text_lock = threading.Lock()  # 保护当前播放文本的锁
+        self.current_played_text: str = ""  # 当前任务的TTS实际播放文本（实时更新）
+        self.current_played_text_task_id: int = 0  # 当前播放文本对应的任务ID
         
         log_info("MANAGER", "核心调度器初始化完成", indent=0)
     
@@ -665,68 +664,6 @@ class DialogueManager:
         
         self._handle_asr_result(text, confidence)
     
-    def _is_nothing_said_yet(self) -> bool:
-        """
-        判断当前任务是否被判定为"什么都没说过"
-        
-        判断条件：
-        1. 播放线程还没启动（player_thread_started == False）
-        2. 或截止新语音活动开始时，播放时长 < min_audio_length
-        
-        Returns:
-            True表示什么都没说过，False表示已经说过
-        """
-        log_info("MANAGER", "[NOTHING_SAID-001] 开始判断是否'什么都没说过'", indent=1)
-        
-        # 条件1: 播放线程还没启动
-        player_thread_started = self._get_player_thread_started_safe()
-        log_info("MANAGER", f"[NOTHING_SAID-002] 检查播放线程状态: player_thread_started={player_thread_started}", indent=2)
-        
-        if not player_thread_started:
-            log_info("MANAGER", "[NOTHING_SAID-002] 播放线程未启动，判定为'什么都没说过'", indent=2)
-            log_info("MANAGER", "[NOTHING_SAID-001] 判断结果: True（什么都没说过）", indent=1)
-            return True
-        
-        # 条件2: 播放时长不足（需要从TaskContext获取播放开始时间）
-        # 注意：在v3.0架构中，播放开始时间应该存储在TaskContext中
-        # 这里简化处理，如果voice_activity_start_time > 0，说明有语音活动
-        log_info("MANAGER", f"[NOTHING_SAID-003] 播放线程已启动，检查播放时长: voice_activity_start_time={self.voice_activity_start_time}, min_audio_length={self.min_audio_length}秒", indent=2)
-        
-        if self.voice_activity_start_time > 0:
-            # 尝试从当前任务上下文获取播放开始时间
-            current_context = self.context_manager.get_current_context()
-            log_info("MANAGER", f"[NOTHING_SAID-003] 获取当前上下文: context={'存在' if current_context else 'None'}, is_valid={current_context.is_valid if current_context else False}", indent=3)
-            
-            if current_context and current_context.is_valid:
-                play_start_time = current_context.get_extra_data("play_start_time", 0.0)
-                log_info("MANAGER", f"[NOTHING_SAID-003] 播放开始时间: play_start_time={play_start_time}", indent=3)
-                
-                if play_start_time > 0:
-                    # 计算截止新语音活动开始时的播放时长
-                    play_duration = self.voice_activity_start_time - play_start_time
-                    log_info("MANAGER", f"[NOTHING_SAID-003] 计算播放时长: {play_duration:.3f}秒 (voice_activity_start_time={self.voice_activity_start_time:.3f} - play_start_time={play_start_time:.3f})", indent=3)
-                    
-                    if play_duration < self.min_audio_length:
-                        log_info("MANAGER", f"[NOTHING_SAID-003] 播放时长不足 ({play_duration:.3f}秒 < {self.min_audio_length}秒)，判定为'什么都没说过'", indent=3)
-                        log_info("MANAGER", "[NOTHING_SAID-001] 判断结果: True（什么都没说过）", indent=1)
-                        return True
-                    else:
-                        log_info("MANAGER", f"[NOTHING_SAID-003] 播放时长足够 ({play_duration:.3f}秒 >= {self.min_audio_length}秒)，判定为'已经说过'", indent=3)
-                        log_info("MANAGER", "[NOTHING_SAID-001] 判断结果: False（已经说过）", indent=1)
-                        return False
-                else:
-                    # 播放线程已启动但还没开始播放
-                    log_info("MANAGER", "[NOTHING_SAID-003] 播放开始时间为0，播放线程已启动但还未开始播放，判定为'什么都没说过'", indent=3)
-                    log_info("MANAGER", "[NOTHING_SAID-001] 判断结果: True（什么都没说过）", indent=1)
-                    return True
-            else:
-                log_info("MANAGER", "[NOTHING_SAID-003] 当前上下文无效或为空，无法获取播放开始时间", indent=3)
-        else:
-            log_info("MANAGER", f"[NOTHING_SAID-003] voice_activity_start_time={self.voice_activity_start_time} <= 0，无法计算播放时长", indent=3)
-        
-        log_info("MANAGER", "[NOTHING_SAID-001] 判断结果: False（已经说过或无法判断）", indent=1)
-        return False
-    
     def _confirm_real_interrupt(self):
         """
         确认真实打断并停止播放
@@ -769,11 +706,64 @@ class DialogueManager:
                 audio_status = self.audio_player.get_status()
                 audio_task_id = self.audio_player.get_current_task_id()
                 
+                # 用于存储计算出的最新播放文本
+                latest_played_text_calculated = None
+                
                 if audio_task_id == current_task_id and audio_status in [PlaybackStatus.PLAYING, PlaybackStatus.PAUSED]:
                     # 当前任务正在播放或已暂停，获取播放进度
                     progress = self.audio_player.get_progress()
                     played_duration = progress.get("elapsed_time", 0.0)
                     log_info("MANAGER", f"[HISTORY_CHECK-000] 当前任务正在播放/暂停，获取播放时长: {played_duration:.2f}秒", indent=1)
+                    
+                    # 从context中获取最新的播放文本信息（这些信息由_on_playback_progress事件更新）
+                    if current_context and current_context.is_valid:
+                        completed_sentences = current_context.get_extra_data("completed_sentences", [])
+                        last_sentence_text = current_context.get_extra_data("last_sentence_text", "")
+                        current_sentence_text = current_context.get_extra_data("current_sentence_text", "")
+                        current_sentence_position = current_context.get_extra_data("current_sentence_position", 0)
+                        
+                        log_info("MANAGER", f"[HISTORY_CHECK-000] 从context获取播放进度信息: completed_sentences={len(completed_sentences)}个, last_sentence_text长度={len(last_sentence_text)}, current_sentence_text长度={len(current_sentence_text)}, position={current_sentence_position}", indent=1)
+                        if completed_sentences:
+                            for i, sentence in enumerate(completed_sentences):
+                                preview = sentence[:50] + "..." if len(sentence) > 50 else sentence
+                                log_info("MANAGER", f"[HISTORY_CHECK-000]   已完成句子{i+1}: '{preview}'", indent=2)
+                        
+                        # 如果last_sentence_text存在且不在completed_sentences中，说明当前正在播放这个句子
+                        # 需要将其也包含在已播放文本中（如果它已经被播放了一部分）
+                        if last_sentence_text and last_sentence_text not in completed_sentences:
+                            # 如果last_sentence_text存在但current_sentence_text为空，说明句子刚切换但还没更新
+                            # 使用last_sentence_text作为当前句子
+                            if not current_sentence_text:
+                                current_sentence_text = last_sentence_text
+                                # 如果position为0，说明这个句子还没开始播放，不应该包含
+                                # 如果position>0，说明已经开始播放，应该包含
+                                if current_sentence_position == 0:
+                                    current_sentence_text = ""  # 还没开始播放，不包含
+                                    log_info("MANAGER", f"[HISTORY_CHECK-000] last_sentence_text存在但position=0，不包含在已播放文本中", indent=2)
+                        
+                        # 计算已播放文本（与_on_playback_progress中的逻辑一致）
+                        if completed_sentences or current_sentence_text:
+                            completed_text = "".join(completed_sentences)
+                            # 如果current_sentence_position有效，使用它（多算一个字符，确保结尾字符也被包含）；否则假设当前句子已播放完整
+                            if current_sentence_text and current_sentence_position > 0 and current_sentence_position <= len(current_sentence_text):
+                                # 多算一个字符，确保结尾字符也能被算进来
+                                current_sentence_end_pos = min(current_sentence_position + 1, len(current_sentence_text))
+                                current_playing_text = completed_text + current_sentence_text[:current_sentence_end_pos]
+                                log_info("MANAGER", f"[HISTORY_CHECK-000] 计算已播放文本: 已完成句子文本长度={len(completed_text)}, 当前句子已播放长度={current_sentence_end_pos}", indent=2)
+                            elif current_sentence_text:
+                                # 如果位置无效，假设当前句子已播放完整
+                                current_playing_text = completed_text + current_sentence_text
+                                log_info("MANAGER", f"[HISTORY_CHECK-000] 计算已播放文本: 已完成句子文本长度={len(completed_text)}, 当前句子完整长度={len(current_sentence_text)}", indent=2)
+                            else:
+                                # 只有已完成的句子，没有当前正在播放的句子
+                                current_playing_text = completed_text
+                                log_info("MANAGER", f"[HISTORY_CHECK-000] 计算已播放文本: 只有已完成句子，总长度={len(completed_text)}", indent=2)
+                            
+                            latest_played_text_calculated = current_playing_text
+                            log_info("MANAGER", f"[HISTORY_CHECK-000] 从context计算最新播放文本: 长度={len(latest_played_text_calculated) if latest_played_text_calculated else 0}字符", indent=1)
+                            if latest_played_text_calculated:
+                                preview = latest_played_text_calculated[:100] + "..." if len(latest_played_text_calculated) > 100 else latest_played_text_calculated
+                                log_info("MANAGER", f"[HISTORY_CHECK-000] 计算出的已播放文本内容: '{preview}'", indent=2)
                 else:
                     # 当前任务还没有开始播放，播放时长为0
                     log_info("MANAGER", f"[HISTORY_CHECK-000] 当前任务尚未开始播放 (音频任务ID={audio_task_id}, 当前任务ID={current_task_id}, 状态={audio_status.value})，播放时长为0", indent=1)
@@ -785,10 +775,28 @@ class DialogueManager:
                 stop_result = self.audio_player.stop(task_id=current_task_id)
                 log_info("MANAGER", f"[AUDIO_STOP-001] audio_player.stop() 返回: {stop_result}", indent=1)
         
-            # 检查播放时长，决定是否记录历史
-            log_info("MANAGER", f"[HISTORY_CHECK-001] 开始检查播放时长: played_duration={played_duration:.2f}秒, 阈值={self.min_play_duration_to_record:.2f}秒", indent=1)
+            # 检查播放时长和文本，决定是否记录历史
+            # 只要有播放（played_duration > 0）或者有播放文本，就应该记录对话历史（忠实记录）
+            log_info("MANAGER", f"[HISTORY_CHECK-001] 开始检查播放时长: played_duration={played_duration:.2f}秒", indent=1)
             
-            if played_duration >= self.min_play_duration_to_record:
+            # 检查是否有播放文本（即使播放时长很短，只要有文本就应该记录）
+            has_played_text = False
+            if current_context and current_context.is_valid:
+                # 检查是否有已播放文本
+                completed_sentences = current_context.get_extra_data("completed_sentences", [])
+                played_response_text = current_context.get_extra_data("played_response_text", "")
+                completed_text = "".join(completed_sentences)
+                if completed_text or played_response_text:
+                    has_played_text = True
+                    log_info("MANAGER", f"[HISTORY_CHECK-001] 检测到有播放文本: 已完成句子数={len(completed_sentences)}, 当前播放文本长度={len(played_response_text)}字符", indent=1)
+                # 也检查manager中实时跟踪的文本
+                if not has_played_text:
+                    with self.current_played_text_lock:
+                        if self.current_played_text_task_id == current_task_id and self.current_played_text:
+                            has_played_text = True
+                            log_info("MANAGER", f"[HISTORY_CHECK-001] 检测到manager中实时跟踪的播放文本: 长度={len(self.current_played_text)}字符", indent=1)
+            
+            if played_duration > 0 or has_played_text:
                 log_info("MANAGER", f"[HISTORY_CHECK-002] 播放时长达到阈值，准备记录对话历史", indent=1)
                 
                 # 播放时长达到阈值，记录已播放内容到对话历史
@@ -798,16 +806,28 @@ class DialogueManager:
                     user_input = current_context.user_input
                     log_info("MANAGER", f"[HISTORY_CHECK-004] 获取用户输入: 长度={len(user_input) if user_input else 0}字符", indent=1)
                     
-                    played_text = current_context.get_extra_data("played_response_text", "")
-                    log_info("MANAGER", f"[HISTORY_CHECK-005] 获取已播放文本: 长度={len(played_text) if played_text else 0}字符", indent=1)
+                    # 获取已播放文本：completed_sentences + played_response_text
+                    completed_sentences = current_context.get_extra_data("completed_sentences", [])
+                    played_response_text = current_context.get_extra_data("played_response_text", "")
                     
+                    # 计算完整的已播放文本
+                    completed_text = "".join(completed_sentences)
+                    played_text = completed_text + played_response_text
+                    
+                    log_info("MANAGER", f"[HISTORY_CHECK-005] 计算已播放文本: 已完成句子数={len(completed_sentences)}, 已完成文本长度={len(completed_text)}字符, 当前播放文本长度={len(played_response_text)}字符", indent=1)
+                    log_info("MANAGER", f"[HISTORY_CHECK-005] 完整已播放文本长度: {len(played_text)}字符", indent=1)
+                    
+                    # 如果计算出的文本为空，尝试使用manager中实时跟踪的文本
                     if not played_text:
-                        # 如果没有实时更新，使用完整回答文本
-                        log_info("MANAGER", f"[HISTORY_CHECK-006] 已播放文本为空，使用完整回答文本", indent=1)
+                        with self.current_played_text_lock:
+                            if self.current_played_text_task_id == current_task_id and self.current_played_text:
+                                played_text = self.current_played_text
+                                log_info("MANAGER", f"[HISTORY_CHECK-005] 使用manager中实时跟踪的播放文本: 长度={len(played_text)}字符", indent=1)
+                    
+                    # 如果还是没有，使用完整回答文本作为fallback
+                    if not played_text:
                         played_text = current_context.response_text
-                        log_info("MANAGER", f"[HISTORY_CHECK-007] 完整回答文本长度: {len(played_text) if played_text else 0}字符", indent=1)
-                    else:
-                        log_info("MANAGER", f"[HISTORY_CHECK-006] 使用已播放文本（实时更新）", indent=1)
+                        log_info("MANAGER", f"[HISTORY_CHECK-006] 已播放文本为空，使用完整回答文本: 长度={len(played_text) if played_text else 0}字符", indent=1)
                     
                     # 记录到对话历史
                     log_info("MANAGER", f"[HISTORY_CHECK-008] 准备获取 history_lock 并记录到对话历史", indent=1)
@@ -829,22 +849,25 @@ class DialogueManager:
                     
                     log_info("MANAGER", f"[HISTORY_CHECK-011] 对话历史记录完成（播放时长: {played_duration:.2f}秒，历史记录总数: {len(self.conversation_history)}）", indent=1)
                     
-                    # 任务被打断但已记录到对话历史，清空累积输入（避免已处理的输入在后续合并中被重复使用）
-                    if self.accumulated_input:
-                        log_info("MANAGER", f"[HISTORY_CHECK-011] 清空累积输入（打断但已记录）: '{self.accumulated_input}'", indent=2)
-                        self.accumulated_input = ""
+                    # 重置播放文本跟踪（避免重复记录）
+                    with self.current_played_text_lock:
+                        if self.current_played_text_task_id == current_task_id:
+                            log_info("MANAGER", f"[HISTORY_CHECK-012] 重置播放文本跟踪（任务ID={current_task_id}）", indent=1)
+                            self.current_played_text = ""
+                            self.current_played_text_task_id = 0
                     
                     # 设置标记，避免播放线程重复记录
-                    log_info("MANAGER", f"[HISTORY_CHECK-012] 准备设置历史记录标记 history_recorded_by_interrupt=True", indent=1)
+                    log_info("MANAGER", f"[HISTORY_CHECK-013] 准备设置历史记录标记 history_recorded_by_interrupt=True", indent=1)
                     try:
                         current_context.set_extra_data("history_recorded_by_interrupt", True)
-                        log_info("MANAGER", f"[HISTORY_CHECK-013] 历史记录标记设置成功", indent=1)
+                        log_info("MANAGER", f"[HISTORY_CHECK-014] 历史记录标记设置成功", indent=1)
                     except Exception as e:
-                        log_warn("MANAGER", f"[HISTORY_CHECK-013] 设置历史记录标记失败: {e}", indent=1)
+                        log_warn("MANAGER", f"[HISTORY_CHECK-014] 设置历史记录标记失败: {e}", indent=1)
                 else:
                     log_warn("MANAGER", f"[HISTORY_CHECK-003] 当前上下文无效或为空，无法记录对话历史", indent=1)
             else:
-                log_info("MANAGER", f"[HISTORY_CHECK-002] 播放时长未达到阈值，不记录对话历史", indent=1)
+                # 播放时长为0，不记录对话历史（没有播放）
+                log_info("MANAGER", f"[HISTORY_CHECK-002] 播放时长为0，不记录对话历史（没有播放）", indent=1)
             
             log_info("MANAGER", "步骤A: 准备清除pending_interrupt", indent=1)
             # 清除pending_interrupt标志  【这里有点问题】
@@ -896,12 +919,26 @@ class DialogueManager:
         
         # 检查是否已经处理过（避免重复处理）
         if main_state == MainSystemState.IDLE and sub_state == SubSystemState.PROCESSING:
-            # 如果状态已经是 idle + processing，说明已经处理过了，直接返回
+            # 如果状态已经是 idle + processing，说明已经处理过了
+            # 但是，如果音频正在播放，应该先记录被打断的任务
+            if self.audio_player:
+                is_playing = hasattr(self.audio_player, 'is_playing') and self.audio_player.is_playing()
+                is_paused = hasattr(self.audio_player, 'is_paused') and self.audio_player.is_paused()
+                if is_playing or is_paused:
+                    log_info("MANAGER", f"识别结果已处理，但检测到音频正在播放，先记录被打断的任务", indent=0)
+                    try:
+                        self._confirm_real_interrupt()
+                    except Exception as e:
+                        log_error("MANAGER", f"记录被打断的任务失败: {e}", indent=0)
+                        import traceback
+                        log_error("MANAGER", f"异常堆栈:\n{traceback.format_exc()}", indent=0)
             log_debug("MANAGER", f"识别结果已处理，跳过: '{text}'", indent=0)
             return
         
-        # 验证输入有效性
-        if not self._validate_input(text):
+        # 验证输入有效性（但无论是否有效，都要记录用户输入）
+        is_valid_input = self._validate_input(text)
+        
+        if not is_valid_input:
             log_warn("MANAGER", f"识别结果无效: '{text}'", indent=0)
             
             # 根据系统状态处理无效输入
@@ -938,7 +975,6 @@ class DialogueManager:
                     with self.interrupt_lock:
                         self.pending_interrupt = False
                     self.paused_sub_state = None
-                    self.nothing_said_yet = False
                     # 主系统状态: LISTENING → IDLE
                     self.state_manager.transition_main_state(MainSystemState.IDLE, "ASR验证失败（误判），恢复正常状态")
                     # 副系统状态: PAUSED → PROCESSING
@@ -975,7 +1011,6 @@ class DialogueManager:
                         with self.interrupt_lock:
                             self.pending_interrupt = False
                         self.paused_sub_state = None
-                        self.nothing_said_yet = False
                         # 主系统状态: LISTENING → ROBOT_SPEAKING
                         self.state_manager.transition_main_state(MainSystemState.ROBOT_SPEAKING, "ASR验证失败（误判），恢复播放状态")
                         # 副系统状态: PAUSED → SPEAKING
@@ -988,16 +1023,15 @@ class DialogueManager:
                         with self.interrupt_lock:
                             self.pending_interrupt = False
                         self.paused_sub_state = None
-                        self.nothing_said_yet = False
                         # 主系统状态: LISTENING → IDLE
                         self.state_manager.transition_main_state(MainSystemState.IDLE, "ASR验证失败但播放器已停止")
                         # 副系统状态: PAUSED → NONE
                         self.state_manager.transition_sub_state(SubSystemState.NONE, "ASR验证失败但播放器已停止")
-            elif sub_state == SubSystemState.PROCESSING and main_state == MainSystemState.LISTENING:
-                # 场景5: PROCESSING + LISTENING状态
+            elif sub_state == SubSystemState.PROCESSING and (main_state == MainSystemState.LISTENING or main_state == MainSystemState.IDLE):
+                # 场景5: PROCESSING + LISTENING/IDLE状态
                 # 如果识别结果为0个字符（空字符串），判断为误识别，恢复PROCESSING状态继续处理
                 if not text or not text.strip():
-                    log_info("MANAGER", "场景5: 无效输入（0个字符），PROCESSING + LISTENING状态，判断为误识别，恢复PROCESSING状态继续处理", indent=0)
+                    log_info("MANAGER", f"场景5: 无效输入（0个字符），PROCESSING + {main_state.value}状态，判断为误识别，恢复PROCESSING状态继续处理", indent=0)
                     
                     # 发布打断取消事件（误判）
                     if self.event_bus:
@@ -1018,10 +1052,10 @@ class DialogueManager:
                     with self.interrupt_lock:
                         self.pending_interrupt = False
                     self.paused_sub_state = None
-                    self.nothing_said_yet = False
                     
-                    # 主系统状态: LISTENING → IDLE
-                    self.state_manager.transition_main_state(MainSystemState.IDLE, "ASR验证失败（误判，0字符），恢复正常状态")
+                    # 主系统状态: LISTENING/IDLE → IDLE（确保是IDLE状态）
+                    if main_state != MainSystemState.IDLE:
+                        self.state_manager.transition_main_state(MainSystemState.IDLE, "ASR验证失败（误判，0字符），恢复正常状态")
                     # 副系统状态: PROCESSING → PROCESSING（保持不变，继续处理）
                     # 注意：这里不需要转换状态，因为已经是PROCESSING状态，只需要清除打断标记即可
                 else:
@@ -1035,7 +1069,6 @@ class DialogueManager:
                     with self.interrupt_lock:
                         self.pending_interrupt = False
                     self.paused_sub_state = None
-                    self.nothing_said_yet = False
                     
                     # 场景5特殊处理：无效输入时，副系统状态应该直接恢复为None
                     current_sub_state = self.state_manager.get_sub_state()
@@ -1044,16 +1077,42 @@ class DialogueManager:
                     # 确保主系统状态也更新为IDLE
                     self.state_manager.transition_main_state(MainSystemState.IDLE, "无效输入，取消任务")
             else:
-                # 其他情况（包括普通LISTENING状态），也需要恢复为IDLE
-                log_info("MANAGER", "无效输入，恢复IDLE状态", indent=0)
-                # 清除打断相关标记
-                log_info("MANAGER", "[LOCK-006] _handle_asr_result() 无效输入-其他情况 正在获取 interrupt_lock", indent=0)
-                with self.interrupt_lock:
-                    self.pending_interrupt = False
-                self.paused_sub_state = None
-                self.nothing_said_yet = False
-                self.state_manager.transition_main_state(MainSystemState.IDLE, "无效输入")
-                self.state_manager.transition_sub_state(SubSystemState.NONE, "无效输入")
+                # 其他情况（包括普通LISTENING状态）
+                # 如果系统状态是IDLE + PROCESSING，说明正在正常处理，不应该因为无效输入而中断处理
+                if sub_state == SubSystemState.PROCESSING and main_state == MainSystemState.IDLE:
+                    # IDLE + PROCESSING状态，无效输入（非空但无效），判断为误识别，保持PROCESSING状态继续处理
+                    log_info("MANAGER", f"无效输入（非空但无效），IDLE + PROCESSING状态，判断为误识别，保持PROCESSING状态继续处理", indent=0)
+                    
+                    # 发布打断取消事件（误判）
+                    if self.event_bus:
+                        current_task_id = self.context_manager.get_current_task_id()
+                        event = create_event(
+                            EventType.INTERRUPT_CANCELLED,
+                            data={
+                                "task_id": current_task_id,
+                                "previous_state": "processing",
+                                "reason": "invalid_input"
+                            },
+                            source="DialogueManager"
+                        )
+                        self.event_bus.publish(event)
+                    
+                    # 清除所有打断相关标记
+                    log_info("MANAGER", "[LOCK-006] _handle_asr_result() 无效输入-IDLE+PROCESSING误识别恢复 正在获取 interrupt_lock", indent=0)
+                    with self.interrupt_lock:
+                        self.pending_interrupt = False
+                    self.paused_sub_state = None
+                    # 主系统状态和副系统状态保持不变，继续处理
+                else:
+                    # 其他情况，恢复为IDLE
+                    log_info("MANAGER", "无效输入，恢复IDLE状态", indent=0)
+                    # 清除打断相关标记
+                    log_info("MANAGER", "[LOCK-006] _handle_asr_result() 无效输入-其他情况 正在获取 interrupt_lock", indent=0)
+                    with self.interrupt_lock:
+                        self.pending_interrupt = False
+                    self.paused_sub_state = None
+                    self.state_manager.transition_main_state(MainSystemState.IDLE, "无效输入")
+                    self.state_manager.transition_sub_state(SubSystemState.NONE, "无效输入")
             
             return
         
@@ -1085,124 +1144,29 @@ class DialogueManager:
             
             if paused_before_state == SubSystemState.PROCESSING:
                 # 场景3/4: 正在处理时被打断（已暂停）
-                log_info("MANAGER", "[INPUT_MERGE-001] 进入场景3/4判断: 暂停前状态为PROCESSING（LLM/TTS处理中但未开始播放）", indent=0)
-                log_info("MANAGER", f"[INPUT_MERGE-001] 当前状态: 主系统={main_state.value}, 副系统={sub_state.value}, 暂停前状态={paused_before_state.value}", indent=1)
-                log_info("MANAGER", f"[INPUT_MERGE-001] 新ASR识别结果: '{text}'", indent=1)
+                log_info("MANAGER", "场景3/4: 暂停前状态为PROCESSING（LLM/TTS处理中但未开始播放），取消任务并处理新输入", indent=0)
                 
-                # 快速连续输入场景：判断是否"什么都没说过"
-                log_info("MANAGER", "[INPUT_MERGE-002] 开始判断是否'什么都没说过'", indent=1)
-                is_nothing_said = self._is_nothing_said_yet()
-                log_info("MANAGER", f"[INPUT_MERGE-002] 判断结果: is_nothing_said={is_nothing_said}", indent=1)
-                
-                # 获取当前任务上下文
+                # 取消当前任务（先记录用户输入）
                 current_context = self.context_manager.get_current_context()
-                has_current_input = current_context and current_context.is_valid and bool(current_context.user_input)
-                log_info("MANAGER", f"[INPUT_MERGE-003] 获取当前任务上下文: task_id={current_context.task_id if current_context else None}, has_current_input={has_current_input}", indent=1)
-                if has_current_input and current_context:
-                    log_info("MANAGER", f"[INPUT_MERGE-003] 当前任务用户输入: '{current_context.user_input}'", indent=2)
+                log_info("MANAGER", f"准备取消当前任务: task_id={current_context.task_id if current_context else None}", indent=1)
+                if current_context and current_context.is_valid:
+                    self._record_user_input_on_cancel(current_context)
+                self.context_manager.cancel_current_context()
+                log_info("MANAGER", "当前任务已取消，上下文已失效", indent=1)
                 
-                if is_nothing_said:
-                    # 什么都没说过：累积输入，取消当前任务，合并处理
-                    log_info("MANAGER", "[INPUT_MERGE-004] 分支1: 快速连续输入场景（什么都没说过），开始累积输入并取消当前任务", indent=1)
-                    
-                    # 重置性能计时器，重新开始计时（从当前VAD结束时间开始）
-                    log_info("MANAGER", "[PERF_TIMER] 什么都没说过场景，重置性能计时器，重新开始计时", indent=1)
-                    log_info("TIME", "什么都没说过场景重置性能计时器", indent=1)
-                    self.performance_timer.reset()
-                    # 重新记录当前VAD结束时间作为新的起点（ASR识别完成时VAD应该已经结束）
-                    log_info("TIME", "什么都没说过场景重新记录VAD结束时间作为新的起点", indent=1)
-                    self.performance_timer.record_vad_speech_end()
-                    log_info("MANAGER", "[PERF_TIMER] 已重新记录VAD结束时间作为新的起点", indent=1)
-                    self.performance_timer.set_paused_reset_flag(value=True)
-                    log_info("TIME", "什么都没说过场景设置暂停重置", indent=1)
-                    
-                    # 累积当前输入到accumulated_input
-                    if has_current_input and current_context:
-                        old_input = current_context.user_input
-                        log_info("MANAGER", f"[INPUT_MERGE-004] 获取旧输入: '{old_input}'", indent=2)
-                        
-                        if self.accumulated_input:
-                            log_info("MANAGER", f"[INPUT_MERGE-004] 已有累积输入: '{self.accumulated_input}'，开始合并", indent=2)
-                            self.accumulated_input = self.accumulated_input.strip() + " " + old_input.strip()
-                            log_info("MANAGER", f"[INPUT_MERGE-004] 合并后累积输入: '{self.accumulated_input}'", indent=2)
-                        else:
-                            log_info("MANAGER", f"[INPUT_MERGE-004] 无累积输入，直接设置: '{old_input}'", indent=2)
-                            self.accumulated_input = old_input.strip()
-                        log_info("MANAGER", f"[INPUT_MERGE-004] 最终累积输入: '{self.accumulated_input}'", indent=2)
-                    else:
-                        log_info("MANAGER", "[INPUT_MERGE-004] 当前任务无有效输入，跳过累积", indent=2)
-                    
-                    # 取消当前任务
-                    log_info("MANAGER", f"[INPUT_MERGE-005] 准备取消当前任务: task_id={current_context.task_id if current_context else None}", indent=2)
-                    # 在取消前保存旧输入
-                    old_input_to_merge = current_context.user_input if current_context and current_context.is_valid else ""
-                    if old_input_to_merge:
-                        log_info("MANAGER", f"[INPUT_MERGE-005] 保存旧输入（取消前）: '{old_input_to_merge}'", indent=3)
-                    self.context_manager.cancel_current_context()
-                    log_info("MANAGER", "[INPUT_MERGE-005] 当前任务已取消，上下文已失效", indent=2)
-                    
-                    # 清除打断相关标记
-                    log_info("MANAGER", "[INPUT_MERGE-006] 准备清除打断相关标记", indent=2)
-                    log_info("MANAGER", "[LOCK-007] _handle_asr_result() 快速连续输入-什么都没说过 正在获取 interrupt_lock", indent=0)
-                    with self.interrupt_lock:
-                        old_pending = self.pending_interrupt
-                        self.pending_interrupt = False
-                        log_info("MANAGER", f"[INPUT_MERGE-006] pending_interrupt: {old_pending} -> False", indent=3)
-                    self.paused_sub_state = None
-                    self.nothing_said_yet = False
-                    log_info("MANAGER", "[INPUT_MERGE-006] 打断相关标记已清除", indent=2)
-                    
-                    # 副系统状态: PAUSED → NONE
-                    log_info("MANAGER", "[INPUT_MERGE-007] 准备转换副系统状态: PAUSED -> NONE", indent=2)
-                    self.state_manager.transition_sub_state(SubSystemState.NONE, "什么都没说过，取消任务准备合并输入")
-                    log_info("MANAGER", "[INPUT_MERGE-007] 状态转换完成", indent=2)
-                    
-                    # 处理新输入（合并输入）
-                    log_info("MANAGER", f"[INPUT_MERGE-008] 准备处理新输入（合并模式）: 新输入='{text}', 累积输入='{self.accumulated_input}'", indent=2)
-                    # 传递已保存的旧输入（如果有）
-                    old_input_to_merge = self.accumulated_input if self.accumulated_input else ""
-                    self._process_user_input(text, is_merge=True, old_input=old_input_to_merge)
-                    log_info("MANAGER", "[INPUT_MERGE-008] 新输入处理完成", indent=2)
-                else:
-                    # 延迟取消或普通取消情况
-                    log_info("MANAGER", "[INPUT_MERGE-009] 分支2: 延迟取消或普通取消情况，开始取消任务并合并输入", indent=1)
-                    log_info("MANAGER", f"[INPUT_MERGE-009] 当前任务信息: task_id={current_context.task_id if current_context else None}", indent=2)
-                    if has_current_input and current_context:
-                        log_info("MANAGER", f"[INPUT_MERGE-009] 当前任务用户输入: '{current_context.user_input}'", indent=2)
-                    
-                    # 取消当前任务
-                    log_info("MANAGER", f"[INPUT_MERGE-010] 准备取消当前任务: task_id={current_context.task_id if current_context else None}", indent=2)
-                    # 在取消前保存旧输入
-                    old_input_to_merge = current_context.user_input if current_context and current_context.is_valid else ""
-                    if old_input_to_merge:
-                        log_info("MANAGER", f"[INPUT_MERGE-010] 保存旧输入（取消前）: '{old_input_to_merge}'", indent=3)
-                    self.context_manager.cancel_current_context()
-                    log_info("MANAGER", "[INPUT_MERGE-010] 当前任务已取消，上下文已失效", indent=2)
-                    
-                    # 清除打断相关标记
-                    log_info("MANAGER", "[INPUT_MERGE-011] 准备清除打断相关标记", indent=2)
-                    log_info("MANAGER", "[LOCK-008] _handle_asr_result() 场景3/4-延迟取消或普通取消 正在获取 interrupt_lock", indent=0)
-                    with self.interrupt_lock:
-                        old_pending = self.pending_interrupt
-                        self.pending_interrupt = False
-                        log_info("MANAGER", f"[INPUT_MERGE-011] pending_interrupt: {old_pending} -> False", indent=3)
-                    self.paused_sub_state = None
-                    self.nothing_said_yet = False
-                    log_info("MANAGER", "[INPUT_MERGE-011] 打断相关标记已清除", indent=2)
-                    
-                    # 副系统状态: PAUSED → NONE
-                    log_info("MANAGER", "[INPUT_MERGE-012] 准备转换副系统状态: PAUSED -> NONE", indent=2)
-                    self.state_manager.transition_sub_state(SubSystemState.NONE, "确认真实打断，准备处理新输入（场景3/4）")
-                    log_info("MANAGER", "[INPUT_MERGE-012] 状态转换完成", indent=2)
-                    
-                    # 处理新输入（合并输入）
-                    log_info("MANAGER", f"[INPUT_MERGE-013] 准备处理新输入（合并模式）: 新输入='{text}'", indent=2)
-                    # 传递已保存的旧输入（如果有）
-                    old_input_to_merge = current_context.user_input if has_current_input and current_context else ""
-                    if old_input_to_merge:
-                        log_info("MANAGER", f"[INPUT_MERGE-013] 将合并已保存的旧输入: '{old_input_to_merge}'", indent=2)
-                    self._process_user_input(text, is_merge=True, old_input=old_input_to_merge)
-                    log_info("MANAGER", "[INPUT_MERGE-013] 新输入处理完成", indent=2)
+                # 清除打断相关标记
+                log_info("MANAGER", "[LOCK-007] _handle_asr_result() 场景3/4 正在获取 interrupt_lock", indent=0)
+                with self.interrupt_lock:
+                    self.pending_interrupt = False
+                self.paused_sub_state = None
+                log_info("MANAGER", "打断相关标记已清除", indent=1)
+                
+                # 副系统状态: PAUSED → NONE
+                self.state_manager.transition_sub_state(SubSystemState.NONE, "确认真实打断，准备处理新输入（场景3/4）")
+                
+                # 处理新输入
+                log_info("MANAGER", f"开始处理新输入: '{text}'", indent=1)
+                self._process_user_input(text)
             else:
                 # 场景2: 正在播放时被打断（已暂停），正式打断并处理新输入
                 log_info("MANAGER", "场景2: PAUSED状态（正在播放时被打断），确认真实打断", indent=0)
@@ -1212,7 +1176,7 @@ class DialogueManager:
                     self._confirm_real_interrupt()
                     log_info("MANAGER", "场景2: 开始处理新输入", indent=0)
                     # 处理新输入
-                    self._process_user_input(text, is_merge=False)
+                    self._process_user_input(text)
                 except Exception as e:
                     log_error("MANAGER", f"场景2处理失败: {e}", indent=0)
                     import traceback
@@ -1224,7 +1188,7 @@ class DialogueManager:
             try:
                 self._confirm_real_interrupt()
                 log_info("MANAGER", "场景2变体: 开始处理新输入", indent=0)
-                self._process_user_input(text, is_merge=False)
+                self._process_user_input(text)
             except Exception as e:
                 log_error("MANAGER", f"场景2变体处理失败: {e}", indent=0)
                 import traceback
@@ -1250,57 +1214,29 @@ class DialogueManager:
                 try:
                     # 确认真实打断（包含历史记录逻辑）
                     self._confirm_real_interrupt()
-                    log_info("MANAGER", "[INPUT_MERGE-201] 场景2处理: 开始处理新输入", indent=1)
-                    # 处理新输入（不合并，因为已经在播放了）
-                    self._process_user_input(text, is_merge=False)
+                    log_info("MANAGER", "场景2处理: 开始处理新输入", indent=1)
+                    # 处理新输入
+                    self._process_user_input(text)
                 except Exception as e:
                     log_error("MANAGER", f"场景2处理失败: {e}", indent=1)
                     import traceback
                     log_error("MANAGER", f"异常堆栈:\n{traceback.format_exc()}", indent=1)
                     raise
             else:
-                # 音频还没开始播放，取消任务并合并输入
-                log_info("MANAGER", "[INPUT_MERGE-201] 音频未开始播放，取消任务并合并输入", indent=1)
+                # 音频还没开始播放，取消任务并处理新输入
+                log_info("MANAGER", "音频未开始播放，取消任务并处理新输入", indent=1)
                 
-                # 快速连续输入场景：判断是否"什么都没说过"
-                log_info("MANAGER", "[INPUT_MERGE-202] 开始判断是否'什么都没说过'", indent=1)
-                is_nothing_said = self._is_nothing_said_yet()
-                log_info("MANAGER", f"[INPUT_MERGE-202] 判断结果: is_nothing_said={is_nothing_said}", indent=1)
-                
-                # 重置性能计时器，重新开始计时（从当前VAD结束时间开始）
-                log_info("MANAGER", "[PERF_TIMER] 音频未开始播放场景，重置性能计时器，重新开始计时", indent=1)
-                log_info("TIME", "音频未开始播放场景重置性能计时器", indent=1)
-                self.performance_timer.reset()
-                # 重新记录当前VAD结束时间作为新的起点（ASR识别完成时VAD应该已经结束）
-                log_info("TIME", "音频未开始播放场景重新记录VAD结束时间作为新的起点", indent=1)
-                self.performance_timer.record_vad_speech_end()
-                log_info("MANAGER", "[PERF_TIMER] 已重新记录VAD结束时间作为新的起点", indent=1)
-                self.performance_timer.set_paused_reset_flag(value=True)
-                log_info("TIME", "音频未开始播放场景设置暂停重置", indent=1)
-                
-                # 获取当前任务上下文（在取消之前先保存旧输入）
+                # 取消当前任务（先记录用户输入）
                 current_context = self.context_manager.get_current_context()
-                log_info("MANAGER", f"[INPUT_MERGE-203] 获取当前任务上下文: task_id={current_context.task_id if current_context else None}", indent=1)
-                
-                # 在取消任务之前，先保存旧输入
-                old_input_to_merge = ""
+                log_info("MANAGER", f"准备取消当前任务: task_id={current_context.task_id if current_context else None}", indent=1)
                 if current_context and current_context.is_valid:
-                    old_input_to_merge = current_context.user_input
-                    log_info("MANAGER", f"[INPUT_MERGE-203] 保存旧输入（取消前）: '{old_input_to_merge}'", indent=2)
-                else:
-                    log_info("MANAGER", "[INPUT_MERGE-203] 当前上下文无效或为空，无旧输入可保存", indent=2)
-                
-                # 取消当前任务
-                log_info("MANAGER", f"[INPUT_MERGE-204] 准备取消当前任务: task_id={current_context.task_id if current_context else None}", indent=1)
+                    self._record_user_input_on_cancel(current_context)
                 self.context_manager.cancel_current_context()
-                log_info("MANAGER", "[INPUT_MERGE-204] 当前任务已取消，上下文已失效", indent=1)
+                log_info("MANAGER", "当前任务已取消，上下文已失效", indent=1)
                 
-                # 处理新输入（合并输入）
-                log_info("MANAGER", f"[INPUT_MERGE-205] 准备处理新输入（合并模式）: 新输入='{text}'", indent=1)
-                if old_input_to_merge:
-                    log_info("MANAGER", f"[INPUT_MERGE-205] 将合并已保存的旧输入: '{old_input_to_merge}'", indent=2)
-                self._process_user_input(text, is_merge=True, old_input=old_input_to_merge)
-                log_info("MANAGER", "[INPUT_MERGE-205] 新输入处理完成", indent=1)
+                # 处理新输入
+                log_info("MANAGER", f"开始处理新输入: '{text}'", indent=1)
+                self._process_user_input(text)
         elif main_state == MainSystemState.LISTENING:
             # 检查是否有待处理的打断
             with self.interrupt_lock:
@@ -1310,22 +1246,34 @@ class DialogueManager:
                 # 有pending_interrupt，说明这是打断场景，但状态已经转换了
                 log_info("MANAGER", "打断场景: LISTENING状态，但检测到pending_interrupt=True，确认真实打断", indent=0)
                 self._confirm_real_interrupt()
-                self._process_user_input(text, is_merge=False)
+                self._process_user_input(text)
             else:
                 # 正常情况，处理新输入
                 log_info("MANAGER", "正常场景: LISTENING状态，处理新输入", indent=0)
-                self._process_user_input(text, is_merge=False)
+                self._process_user_input(text)
         elif main_state == MainSystemState.IDLE and sub_state == SubSystemState.SPEAKING:
             # 误判恢复后的状态：主系统=idle, 副系统=speaking
             # 播放还在进行，但ASR识别完成说明用户确实在说话，应该确认打断并处理新输入
             log_info("MANAGER", "误判恢复场景: IDLE+SPEAKING状态（误判恢复后），确认真实打断并处理新输入", indent=0)
             self._confirm_real_interrupt()
-            self._process_user_input(text, is_merge=False)
+            self._process_user_input(text)
         else:
             log_warn("MANAGER", f"意外状态组合: 主系统={main_state.value}, 副系统={sub_state.value}, text='{text}'", indent=0)
+            # 检查是否有音频正在播放，如果有，应该先记录被打断的任务
+            if self.audio_player:
+                is_playing = hasattr(self.audio_player, 'is_playing') and self.audio_player.is_playing()
+                is_paused = hasattr(self.audio_player, 'is_paused') and self.audio_player.is_paused()
+                if is_playing or is_paused:
+                    log_info("MANAGER", "意外状态组合但检测到音频正在播放，先记录被打断的任务", indent=0)
+                    try:
+                        self._confirm_real_interrupt()
+                    except Exception as e:
+                        log_error("MANAGER", f"意外状态组合时记录对话历史失败: {e}", indent=0)
+                        import traceback
+                        log_error("MANAGER", f"异常堆栈:\n{traceback.format_exc()}", indent=0)
             # 尝试处理输入
             log_info("MANAGER", "尝试处理输入（意外状态组合情况）", indent=0)
-            self._process_user_input(text, is_merge=False)
+            self._process_user_input(text)
     
     def _validate_input(self, text: str) -> bool:
         """
@@ -1350,89 +1298,20 @@ class DialogueManager:
         
         return True
     
-    def _process_user_input(self, user_input: str, is_merge: bool = False, old_input: str = ""):
+    def _process_user_input(self, user_input: str):
         """
         处理用户输入
         
         Args:
             user_input: 用户输入文本
-            is_merge: 是否为合并输入
-            old_input: 可选的旧输入（如果提供，将直接使用，不从上下文获取）
         """
-        log_info("MANAGER", f"开始处理用户输入: '{user_input}' (is_merge={is_merge})", indent=0)
+        log_info("MANAGER", f"开始处理用户输入: '{user_input}'", indent=0)
         
-        # 输入合并逻辑
-        if is_merge:
-            log_info("MANAGER", "[INPUT_MERGE-101] 进入输入合并逻辑", indent=1)
-            log_info("MANAGER", f"[INPUT_MERGE-101] 新输入: '{user_input}'", indent=2)
-            
-            # 优先使用传入的old_input参数（如果提供）
-            # 其次使用accumulated_input（快速连续输入场景）
-            # 最后使用current_context.user_input（普通合并场景）
-            old_input_final = ""
-            log_info("MANAGER", "[INPUT_MERGE-102] 开始获取旧输入", indent=2)
-            
-            if old_input and old_input.strip():
-                # 优先使用传入的old_input参数
-                old_input_final = old_input.strip()
-                log_info("MANAGER", f"[INPUT_MERGE-102] 使用传入的旧输入参数: '{old_input_final}'", indent=3)
-            elif self.accumulated_input and self.accumulated_input.strip():
-                # 其次使用accumulated_input
-                old_input_final = self.accumulated_input.strip()
-                log_info("MANAGER", f"[INPUT_MERGE-102] 找到累积输入: '{old_input_final}'", indent=3)
-                # 清空累积输入
-                self.accumulated_input = ""
-                log_info("MANAGER", "[INPUT_MERGE-102] 累积输入已清空", indent=3)
-            else:
-                # 最后尝试从当前上下文获取
-                log_info("MANAGER", "[INPUT_MERGE-102] 无传入参数和累积输入，尝试从当前上下文获取", indent=3)
-                current_context = self.context_manager.get_current_context()
-                log_info("MANAGER", f"[INPUT_MERGE-102] 获取上下文结果: context={'存在' if current_context else 'None'}, is_valid={current_context.is_valid if current_context else False}", indent=3)
-                if current_context and current_context.is_valid:
-                    old_input_final = current_context.user_input
-                    log_info("MANAGER", f"[INPUT_MERGE-102] 从当前上下文获取旧输入: '{old_input_final}' (task_id={current_context.task_id})", indent=3)
-                else:
-                    if current_context:
-                        log_info("MANAGER", f"[INPUT_MERGE-102] 当前上下文已失效（is_valid=False），无法获取旧输入", indent=3)
-                    else:
-                        log_info("MANAGER", "[INPUT_MERGE-102] 当前上下文为空，无旧输入", indent=3)
-            
-            old_input = old_input_final
-            
-            log_info("MANAGER", f"[INPUT_MERGE-103] 旧输入获取完成: '{old_input if old_input else '(空)'}'", indent=2)
-            
-            if old_input:
-                log_info("MANAGER", "[INPUT_MERGE-104] 检测到旧输入，开始合并流程", indent=2)
-                
-                # 检查是否重复（避免相同输入重复合并）
-                old_input_stripped = old_input.strip()
-                user_input_stripped = user_input.strip()
-                log_info("MANAGER", f"[INPUT_MERGE-104] 检查输入是否重复: 旧输入='{old_input_stripped}', 新输入='{user_input_stripped}'", indent=3)
-                
-                if old_input_stripped == user_input_stripped:
-                    log_warn("MANAGER", f"[INPUT_MERGE-104] 检测到重复输入，跳过合并: '{user_input}'", indent=3)
-                    # 取消当前任务，但不合并
-                    log_info("MANAGER", "[INPUT_MERGE-104] 准备取消当前任务（重复输入）", indent=3)
-                    self.context_manager.cancel_current_context()
-                    log_info("MANAGER", "[INPUT_MERGE-104] 当前任务已取消，直接使用新输入（不合并）", indent=3)
-                    # 直接使用新输入，不合并
-                else:
-                    # 合并输入（用空格连接）
-                    log_info("MANAGER", "[INPUT_MERGE-105] 输入不重复，开始合并", indent=3)
-                    merged_input = f"{old_input} {user_input}" if old_input else user_input
-                    log_info("MANAGER", f"[INPUT_MERGE-105] 合并结果: '{old_input}' + '{user_input}' = '{merged_input}'", indent=3)
-                    log_info("MANAGER", f"[INPUT_MERGE-105] 合并后输入长度: {len(merged_input)}字符", indent=3)
-                    user_input = merged_input
-                    
-                    # 取消当前任务（合并时取消旧任务）
-                    log_info("MANAGER", "[INPUT_MERGE-105] 准备取消当前任务（合并输入）", indent=3)
-                    self.context_manager.cancel_current_context()
-                    log_info("MANAGER", "[INPUT_MERGE-105] 当前任务已取消，将使用合并后的输入", indent=3)
-            else:
-                # 无旧输入或旧输入为空，直接使用新输入
-                log_info("MANAGER", f"[INPUT_MERGE-106] 无待合并输入，直接使用新输入: '{user_input}'", indent=2)
-            
-            log_info("MANAGER", f"[INPUT_MERGE-107] 合并逻辑完成，最终输入: '{user_input}'", indent=2)
+        # 重置播放文本跟踪（新任务开始，清除之前的播放文本）
+        with self.current_played_text_lock:
+            self.current_played_text = ""
+            self.current_played_text_task_id = 0
+            log_debug("MANAGER", "新任务开始，重置播放文本跟踪", indent=1)
         
         # 创建新任务上下文（自动使旧任务失效）
         old_task_id = self.context_manager.get_current_task_id()
@@ -1457,7 +1336,7 @@ class DialogueManager:
         if current_sub_state == SubSystemState.PAUSED:
             self.state_manager.transition_sub_state(
                 SubSystemState.PROCESSING,
-                reason="开始处理用户输入（合并后）"
+                reason="开始处理用户输入"
             )
         else:
             self.state_manager.transition_sub_state(
@@ -1533,9 +1412,6 @@ class DialogueManager:
                 with self.interrupt_lock:
                     self.pending_interrupt = True
                 
-                # 记录新语音活动开始时间
-                self.voice_activity_start_time = time.time()
-                log_info("MANAGER", f"检测到可能打断，启动延迟验证（语音活动时间: {self.voice_activity_start_time:.3f}）", indent=0)
                 # 启动延迟验证（通过定时器）
                 self._pause_for_voice_check()
             else:
@@ -1561,9 +1437,6 @@ class DialogueManager:
             with self.interrupt_lock:
                 self.pending_interrupt = True
             
-            # 记录新语音活动开始时间（用于判断"什么都没说过"）
-            self.voice_activity_start_time = time.time()
-            log_info("MANAGER", f"检测到可能打断，启动延迟验证（语音活动时间: {self.voice_activity_start_time:.3f}）", indent=0)
             # 启动延迟验证（通过定时器）
             self._pause_for_voice_check()
         
@@ -1669,32 +1542,81 @@ class DialogueManager:
         completed_sentences = context.get_extra_data("completed_sentences", [])
         last_sentence_text = context.get_extra_data("last_sentence_text", "")
         
-        # 检测句子切换
+        # 先检测句子完成（在句子切换之前，确保当前句子完成时能正确添加）
+        if current_sentence_text:
+            sentence_length = len(current_sentence_text)
+            if current_sentence_position >= sentence_length:
+                # 当前句子播放完成
+                if current_sentence_text not in completed_sentences:
+                    completed_sentences.append(current_sentence_text)
+                    log_info("MANAGER", f"[PLAYBACK_PROGRESS] 当前句子播放完成，添加到已完成列表: '{current_sentence_text[:50]}...' (总句子数: {len(completed_sentences)})", indent=1)
+                    context.set_extra_data("completed_sentences", completed_sentences)
+                else:
+                    log_debug("MANAGER", f"[PLAYBACK_PROGRESS] 当前句子已在已完成列表中，跳过: '{current_sentence_text[:50]}...'", indent=1)
+                # 句子完成后，清空last_sentence_text，准备下一个句子
+                context.set_extra_data("last_sentence_text", "")
+                # 更新本地变量，避免后续逻辑使用旧的last_sentence_text
+                last_sentence_text = ""
+            else:
+                log_debug("MANAGER", f"[PLAYBACK_PROGRESS] 当前句子未完成: position={current_sentence_position}, length={sentence_length}, 文本='{current_sentence_text[:30]}...'", indent=1)
+        
+        # 检测句子切换（在句子完成检测之后）
         if current_sentence_text != last_sentence_text:
             # 句子切换，将上一个句子标记为完成
             if last_sentence_text:
-                completed_sentences.append(last_sentence_text)
+                # 确保上一个句子完整添加到已完成列表（避免重复）
+                if last_sentence_text not in completed_sentences:
+                    completed_sentences.append(last_sentence_text)
+                    log_info("MANAGER", f"[PLAYBACK_PROGRESS] 句子切换，将上一个句子添加到已完成列表: '{last_sentence_text[:50]}...' (总句子数: {len(completed_sentences)})", indent=1)
+                    # 立即保存回context，确保已完成的句子不会丢失
+                    context.set_extra_data("completed_sentences", completed_sentences)
+                else:
+                    log_debug("MANAGER", f"[PLAYBACK_PROGRESS] 句子切换，上一个句子已在已完成列表中，跳过", indent=1)
+            # 更新last_sentence_text为当前句子
             context.set_extra_data("last_sentence_text", current_sentence_text)
+            # 更新本地变量
+            last_sentence_text = current_sentence_text
         
-        # 检测句子完成
-        if current_sentence_position >= len(current_sentence_text):
-            # 当前句子播放完成
-            if current_sentence_text and current_sentence_text not in completed_sentences:
-                completed_sentences.append(current_sentence_text)
-                context.set_extra_data("completed_sentences", completed_sentences)
-                context.set_extra_data("last_sentence_text", "")
+        # 计算当前正在播放的文本（只包含当前句子的部分）
+        # 多算一个字符，确保结尾字符也能被算进来
+        current_sentence_end_pos = min(current_sentence_position + 1, len(current_sentence_text))
+        played_response_text = current_sentence_text[:current_sentence_end_pos] if current_sentence_text else ""
         
-        # 计算已播放文本
-        # 使用空格连接句子，保留每个句子的完整内容（包括标点符号）
+        # 计算完整的已播放文本（用于显示和记录）
+        # completed_sentences 包含所有已播放完成的句子
         completed_text = "".join(completed_sentences)
-        current_playing_text = completed_text + current_sentence_text[:current_sentence_position]
+        # 完整的已播放文本 = 已完成句子 + 当前正在播放的句子部分
+        full_played_text = completed_text + played_response_text
         
-        # 更新TaskContext中的已播放文本
-        context.set_extra_data("played_response_text", current_playing_text)
+        # 实时更新manager中的播放文本（同步到ContextManager）
+        # 注意：manager中保存的是完整的已播放文本（已完成句子 + 当前句子部分）
+        with self.current_played_text_lock:
+            # 检查任务ID是否匹配，如果不匹配说明是新任务，重置
+            if self.current_played_text_task_id != task_id:
+                self.current_played_text = ""
+                self.current_played_text_task_id = task_id
+                log_debug("MANAGER", f"检测到新任务(task_id={task_id})，重置播放文本跟踪", indent=1)
+            
+            # 更新当前播放文本（完整版本，用于记录）
+            self.current_played_text = full_played_text
+        
+        # 同步更新到TaskContext中的已播放文本和原始播放进度信息
+        # played_response_text: 只记录当前正在播放的TTS音频内容（当前句子的部分）
+        context.set_extra_data("played_response_text", played_response_text)
+        # completed_sentences: 记录所有已播放完成的句子
+        context.set_extra_data("completed_sentences", completed_sentences)
+        context.set_extra_data("current_sentence_text", current_sentence_text)
+        context.set_extra_data("current_sentence_position", current_sentence_position)
+        context.set_extra_data("last_sentence_text", last_sentence_text)
+        
+        # 输出调试日志，显示当前累积的已播放文本
+        if completed_sentences:
+            log_debug("MANAGER", f"[PLAYBACK_PROGRESS] 当前已完成句子数: {len(completed_sentences)}, 已完成文本长度: {len(completed_text)}字符, 当前播放文本长度: {len(played_response_text)}字符", indent=1)
         
         # 输出实时播放文字日志（使用inline模式，同一行更新）
-        if current_playing_text:
-            log_info("TTS", f"[播放中] {current_playing_text}", indent=0, inline=True)
+        # 显示完整的已播放文本（已完成句子 + 当前句子部分）
+        if full_played_text:
+            log_info("TTS", f"[播放中] {full_played_text}", indent=0, inline=True)
     
     def _start_asr_thread(self):
         """启动ASR识别线程（线程4）"""
@@ -2075,8 +1997,6 @@ class DialogueManager:
                         log_info("MANAGER", "延迟验证通过，标记为延迟取消状态等待ASR验证（LLM继续生成，TTS不播放）", indent=2)
                         # 记录暂停前的副系统状态，用于场景判断
                         self.paused_sub_state = sub_state
-                        # 标记当前任务可能"什么都没说过"（需要在ASR结果处理时验证）
-                        self.nothing_said_yet = True
                         # 只更新状态为PAUSED，不调用_cancel_current_task（不递增task_id）
                         # 这样LLM和TTS线程可以继续运行，等待ASR结果
                         # 播放线程会检测到PAUSED状态，在开始播放前等待状态变化
@@ -2089,6 +2009,81 @@ class DialogueManager:
         self.voice_check_timer = threading.Timer(self.audio_stop_delay, voice_check_timer_func)
         self.voice_check_timer.start()
     
+    def _record_user_input_on_cancel(self, context: TaskContext):
+        """
+        在任务取消时记录用户输入到对话历史
+        
+        Args:
+            context: 任务上下文（在取消前获取）
+        """
+        if not context or not context.is_valid:
+            return
+        
+        user_input = context.user_input
+        log_info("MANAGER", f"任务取消，记录用户输入到对话历史: '{user_input}'", indent=1)
+        
+        # 检查是否已经开始播放，决定是否记录assistant回复
+        sub_state = self.state_manager.get_sub_state()
+        played_text = None
+        played_duration = 0.0
+        
+        if sub_state == SubSystemState.SPEAKING:
+            # 正在播放时被打断，检查播放时长
+            if self.audio_player:
+                progress = self.audio_player.get_progress()
+                played_duration = progress.get("elapsed_time", 0.0)
+                
+                if played_duration >= self.min_play_duration_to_record:
+                    # 播放时长达到阈值，获取已播放文本：completed_sentences + played_response_text
+                    completed_sentences = context.get_extra_data("completed_sentences", [])
+                    played_response_text = context.get_extra_data("played_response_text", "")
+                    
+                    # 计算完整的已播放文本
+                    completed_text = "".join(completed_sentences)
+                    played_text = completed_text + played_response_text
+                    
+                    log_info("MANAGER", f"播放时长达到阈值（{played_duration:.2f}秒），计算已播放文本: 已完成句子数={len(completed_sentences)}, 已完成文本长度={len(completed_text)}字符, 当前播放文本长度={len(played_response_text)}字符", indent=1)
+                    
+                    # 如果计算出的文本为空，尝试使用manager中实时跟踪的文本
+                    if not played_text:
+                        with self.current_played_text_lock:
+                            if self.current_played_text_task_id == context.task_id and self.current_played_text:
+                                played_text = self.current_played_text
+                                log_info("MANAGER", f"使用manager中实时跟踪的播放文本: 长度={len(played_text)}字符", indent=1)
+                    
+                    # 如果还是没有，使用完整回答文本作为fallback
+                    if not played_text:
+                        played_text = context.response_text
+                        log_info("MANAGER", f"已播放文本为空，使用完整回答文本: 长度={len(played_text) if played_text else 0}字符", indent=1)
+                    
+                    log_info("MANAGER", f"将记录assistant回复: 长度={len(played_text) if played_text else 0}字符", indent=1)
+                else:
+                    log_info("MANAGER", f"播放时长未达到阈值（{played_duration:.2f}秒 < {self.min_play_duration_to_record:.2f}秒），不记录assistant回复", indent=1)
+        else:
+            # PROCESSING状态，还未开始播放，不记录assistant回复
+            log_info("MANAGER", "任务还在PROCESSING状态（未开始播放），不记录assistant回复", indent=1)
+        
+        # 记录到对话历史（用户输入总是记录）
+        with self.history_lock:
+            self.conversation_history.append({"role": "user", "content": user_input})
+            if played_text:
+                # 去除前导空白字符（包括换行符、空格等）
+                played_text_trimmed = played_text.lstrip()
+                self.conversation_history.append({"role": "assistant", "content": played_text_trimmed})
+            # 限制历史记录长度
+            self._limit_history_length()
+        
+        if played_text:
+            log_info("MANAGER", f"任务取消时已记录对话历史（用户输入 + assistant回复，播放时长: {played_duration:.2f}秒）", indent=1)
+            # 重置播放文本跟踪（避免重复记录）
+            with self.current_played_text_lock:
+                if self.current_played_text_task_id == context.task_id:
+                    log_info("MANAGER", f"重置播放文本跟踪（任务ID={context.task_id}）", indent=1)
+                    self.current_played_text = ""
+                    self.current_played_text_task_id = 0
+        else:
+            log_info("MANAGER", f"任务取消时已记录对话历史（仅用户输入，无assistant回复）", indent=1)
+    
     def _cancel_current_task(self):
         """
         取消当前任务
@@ -2100,11 +2095,14 @@ class DialogueManager:
         - 停止音频播放
         - 检查播放时长，决定是否记录历史
         """
-        # 获取当前任务上下文
+        # 获取当前任务上下文（在取消前获取，用于记录历史）
         current_context = self.context_manager.get_current_context()
         if not current_context or not current_context.is_valid:
             log_debug("MANAGER", "当前没有活动的任务，无需取消", indent=0)
             return
+        
+        # 在取消前记录用户输入
+        self._record_user_input_on_cancel(current_context)
         
         # 取消当前任务（使上下文失效）
         self.context_manager.cancel_current_context()
@@ -2133,40 +2131,6 @@ class DialogueManager:
             log_info("MANAGER", f"[AUDIO_STOP-002] 调用前状态: 主={self.state_manager.get_main_state().value}, 副={self.state_manager.get_sub_state().value}", indent=1)
             stop_result = self.audio_player.stop(task_id=task_id)
             log_info("MANAGER", f"[AUDIO_STOP-002] audio_player.stop() 返回: {stop_result}", indent=1)
-        
-        # 检查播放时长，决定是否记录历史
-        # 根据THREAD_SCHEDULING.md场景2，当播放时被打断，如果播放时长 >= MIN_PLAY_DURATION_TO_RECORD，应记录已播放内容
-        sub_state = self.state_manager.get_sub_state()
-        if sub_state == SubSystemState.SPEAKING:
-            # 正在播放时被打断，检查播放时长
-            if self.audio_player:
-                progress = self.audio_player.get_progress()
-                played_duration = progress.get("elapsed_time", 0.0)
-                
-                if played_duration >= self.min_play_duration_to_record:
-                    # 播放时长达到阈值，记录已播放内容到对话历史
-                    user_input = current_context.user_input
-                    played_text = current_context.get_extra_data("played_response_text", "")
-                    if not played_text:
-                        # 如果没有实时更新，使用完整回答文本
-                        played_text = current_context.response_text
-                    
-                    # 记录到对话历史
-                    with self.history_lock:
-                        self.conversation_history.append({"role": "user", "content": user_input})
-                        if played_text:
-                            # 去除前导空白字符（包括换行符、空格等）
-                            played_text_trimmed = played_text.lstrip()
-                            self.conversation_history.append({"role": "assistant", "content": played_text_trimmed})
-                        # 限制历史记录长度
-                        self._limit_history_length()
-                    
-                    log_info("MANAGER", f"任务取消时已记录对话历史（播放时长: {played_duration:.2f}秒）", indent=1)
-                    # 任务被打断但已记录到对话历史，清空累积输入（避免已处理的输入在后续合并中被重复使用）
-                    if self.accumulated_input:
-                        log_info("MANAGER", f"清空累积输入（任务打断但已记录）: '{self.accumulated_input}'", indent=1)
-                        self.accumulated_input = ""
-        # 如果副系统状态为 PROCESSING，说明还未开始播放，不需要记录历史
         
         log_info("MANAGER", f"任务已取消: ID={current_context.task_id}", indent=0)
     
@@ -2630,12 +2594,28 @@ class DialogueManager:
                 if not history_recorded and played_duration >= self.min_play_duration_to_record:
                     # 获取用户输入和播放内容
                     user_input = context.user_input
-                    # 优先使用完整回答文本（包含完整标点符号），而不是实时更新的played_response_text
-                    # 因为played_response_text可能因为句子拼接问题导致标点丢失或重复
-                    played_text = context.response_text
+                    
+                    # 获取已播放文本：completed_sentences + played_response_text
+                    completed_sentences = context.get_extra_data("completed_sentences", [])
+                    played_response_text = context.get_extra_data("played_response_text", "")
+                    
+                    # 计算完整的已播放文本
+                    completed_text = "".join(completed_sentences)
+                    played_text = completed_text + played_response_text
+                    
+                    log_info("MANAGER", f"计算已播放文本: 已完成句子数={len(completed_sentences)}, 已完成文本长度={len(completed_text)}字符, 当前播放文本长度={len(played_response_text)}字符", indent=1)
+                    
+                    # 如果计算出的文本为空，尝试使用manager中实时跟踪的文本
                     if not played_text:
-                        # 如果没有完整回答文本，使用实时更新的文本作为fallback
-                        played_text = context.get_extra_data("played_response_text", "")
+                        with self.current_played_text_lock:
+                            if self.current_played_text_task_id == context.task_id and self.current_played_text:
+                                played_text = self.current_played_text
+                                log_info("MANAGER", f"使用manager中实时跟踪的播放文本: 长度={len(played_text)}字符", indent=1)
+                    
+                    # 如果还是没有，使用完整回答文本作为fallback
+                    if not played_text:
+                        played_text = context.response_text
+                        log_info("MANAGER", f"已播放文本为空，使用完整回答文本: 长度={len(played_text) if played_text else 0}字符", indent=1)
                     
                     # 记录到对话历史
                     with self.history_lock:
@@ -2648,10 +2628,13 @@ class DialogueManager:
                         self._limit_history_length()
                     
                     log_info("MANAGER", f"对话历史已记录（播放时长: {played_duration:.2f}秒）", indent=0)
-                    # 任务成功完成并记录到对话历史，清空累积输入（避免已处理的输入在后续合并中被重复使用）
-                    if self.accumulated_input:
-                        log_info("MANAGER", f"清空累积输入（任务完成）: '{self.accumulated_input}'", indent=1)
-                        self.accumulated_input = ""
+                    
+                    # 重置播放文本跟踪（避免重复记录）
+                    with self.current_played_text_lock:
+                        if self.current_played_text_task_id == context.task_id:
+                            log_info("MANAGER", f"重置播放文本跟踪（任务ID={context.task_id}）", indent=1)
+                            self.current_played_text = ""
+                            self.current_played_text_task_id = 0
                 
                 # 发布任务完成事件
                 completed_event = create_event(

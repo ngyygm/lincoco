@@ -201,6 +201,27 @@ class TaskContext:
         """
         with self._lock:
             self._extra_data[key] = value
+            
+            # 记录assistant相关内容的日志
+            if key in ["played_response_text", "completed_sentences", "response_text"]:
+                from voice_chatbot.utils import log_info
+                if key == "played_response_text":
+                    log_info("CTX", f"[ASSISTANT-001] 任务ID={self._task_id} 更新已播放文本: 长度={len(value) if value else 0}字符", indent=0)
+                    if value:
+                        # 只显示前100个字符，避免日志过长
+                        preview = value
+                        log_info("CTX", f"[ASSISTANT-001] 已播放文本内容: '{preview}'", indent=1)
+                elif key == "completed_sentences":
+                    log_info("CTX", f"[ASSISTANT-002] 任务ID={self._task_id} 更新已完成句子列表: {len(value) if isinstance(value, list) else 0}个句子", indent=0)
+                    if isinstance(value, list) and value:
+                        for i, sentence in enumerate(value):
+                            preview = sentence
+                            log_info("CTX", f"[ASSISTANT-002]   句子{i+1}: '{preview}'", indent=1)
+                elif key == "response_text":
+                    log_info("CTX", f"[ASSISTANT-003] 任务ID={self._task_id} 更新完整回答文本: 长度={len(value) if value else 0}字符", indent=0)
+                    if value:
+                        preview = value
+                        log_info("CTX", f"[ASSISTANT-003] 完整回答文本内容: '{preview}'", indent=1)
     
     @property
     def text_start_time(self) -> float:

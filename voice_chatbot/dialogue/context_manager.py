@@ -80,7 +80,7 @@ class ContextManager:
             )
             self._current_context = new_context
             
-            log_info("CTX", f"创建新任务上下文: ID={self._task_id_counter}, 输入='{user_input[:50]}{'...' if len(user_input) > 50 else ''}'", indent=0)
+            log_info("CTX", f"创建新任务上下文: ID={self._task_id_counter}, 输入='{user_input}'", indent=0)
             
             # 发布TASK_CREATED事件
             if self._event_bus is not None:

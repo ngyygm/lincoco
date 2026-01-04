@@ -47,6 +47,7 @@ class Config:
             "result_timeout": 30.0,  # ASR结果等待超时（秒），统一的ASR超时参数
             "result_time_buffer": 0.5,  # 结果时间缓冲（秒），考虑ASR识别延迟，用于时间段提取时扩展时间范围（增大到0.5秒确保ASR有足够时间输出最后一个字）
             "max_result_age": 60.0,  # 结果最大保留时间（秒），超过此时间的自动清理，防止内存泄漏
+            "enable_deduplication": False,  # 是否启用ASR流式去重，处理流式识别中的重复文本
         },
         "dialogue": {
             "no_speech_threshold": 0.8,  # 无语音阈值（秒），用户停止说话后等待多久才认为说话结束并触发ASR停止，值越大越不容易误判（如换气时），但响应会变慢。建议0.8-1.2秒，语速慢可设更大。从0.4秒改为1.0秒以避免过早停止ASR
@@ -74,7 +75,7 @@ class Config:
         "llm": {
             "api_base": "http://127.0.0.1:5000/v1",  # LLM API基础URL（OpenAI兼容格式）
             "api_key": "sk-1234",  # LLM API密钥
-            "model_name": "qwen3-30b-a3b",  # LLM模型名称
+            "model_name": "qwen/qwen3-30b-a3b",  # LLM模型名称 gemma-3-27b
             "max_tokens": 1024,  # 最大生成token数，控制回复长度
             "temperature": 0.7,  # 生成温度（0.0-2.0），值越大输出越随机，值越小输出越确定
             "min_sentence_length": 8,  # 最小句子长度（字符数或单词数，根据语言类型），用于流式句子合并
@@ -189,7 +190,7 @@ class Config:
             "sequence_diagram_flow_timeout": 30.0,  # 流程超时时间（秒），超过此时间自动结束流程记录（EventLogger用）
             # 日志过滤配置（黑名单模式）
             "filtered_levels": [],  # 被过滤的日志级别列表（如 ["DEBUG"]），这些级别的日志将不输出
-            "filtered_categories": ["THREAD", "EVENT", "MIC", "TIME", "MANAGER"],  # 被过滤的日志类别列表（如 ["THREAD", "EVENT", "MANAGER", "VAD", "CTX", "MIC"]），这些类别的日志将不输出
+            "filtered_categories": ["THREAD", "EVENT", "MIC", "TIME", "MANAGER", "CTX"],  # 被过滤的日志类别列表（如 ["THREAD", "EVENT", "MANAGER", "VAD", "CTX", "MIC"]），这些类别的日志将不输出
             # 日志类别专属颜色配置（字典格式：{"CATEGORY": "COLOR_NAME"}，如 {"ASR": "GREEN", "LLM": "CYAN"}）
             # 支持的颜色名称：BLACK, RED, GREEN, YELLOW, BLUE, MAGENTA, CYAN, WHITE,
             # BRIGHT_BLACK, BRIGHT_RED, BRIGHT_GREEN, BRIGHT_YELLOW, BRIGHT_BLUE, BRIGHT_MAGENTA, BRIGHT_CYAN, BRIGHT_WHITE

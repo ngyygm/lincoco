@@ -222,6 +222,7 @@ class FunASRStream:
         self.decoder_chunk_look_back = config.get("asr.decoder_chunk_look_back", 1)
         self.pre_buffer_seconds = config.get("asr.pre_buffer_seconds", 0.5)
         self.language = config.get("asr.language", "zh")  # 默认中文
+        self.enable_deduplication = config.get("asr.enable_deduplication", True)  # 是否启用去重
         # 注意：ASR不再使用no_speech_threshold，完全依赖VAD的speaking标志来决定何时结束识别
         
         # 验证模型路径
@@ -239,8 +240,10 @@ class FunASRStream:
         else:
             self.pre_buffer = pre_buffer
         
-        # ASR去重器
+        # ASR去重器（总是创建，但根据配置决定是否使用）
         self.deduplicator = ASRDeduplicator()
+        # 用于存储累积文本（当去重禁用时使用）
+        self.accumulated_text = ""
         
         # 状态控制
         self.recognizing = False
@@ -368,7 +371,7 @@ class FunASRStream:
             self.asr_cache = {}
             self.final_result = ""
             self.partial_result = ""
-            self.deduplicator.reset()
+            self._reset_text_accumulator()
             self.recognizing = True
             self.speaking = True
 
@@ -449,8 +452,8 @@ class FunASRStream:
         # 获取结果
         result = self.final_result
         
-        # 清空去重器，准备下一次识别
-        self.deduplicator.reset()
+        # 清空文本累积器，准备下一次识别
+        self._reset_text_accumulator()
         
         # 清空结果
         self.final_result = ""
@@ -495,6 +498,43 @@ class FunASRStream:
                     return float(confidence)
         
         return None
+    
+    def _process_text(self, new_text: str) -> str:
+        """
+        处理新的识别文本，根据配置决定是否使用去重
+        
+        Args:
+            new_text: ASR模型返回的当前chunk识别结果
+            
+        Returns:
+            处理后的完整文本
+        """
+        if self.enable_deduplication:
+            return self.deduplicator.process(new_text)
+        else:
+            # 如果禁用去重，累加文本
+            if new_text:
+                self.accumulated_text += new_text
+            return self.accumulated_text
+    
+    def _get_accumulated_text(self) -> str:
+        """
+        获取累积的文本，根据配置决定是否使用去重器
+        
+        Returns:
+            累积的文本
+        """
+        if self.enable_deduplication:
+            return self.deduplicator.get_text()
+        else:
+            return self.accumulated_text
+    
+    def _reset_text_accumulator(self):
+        """重置文本累积器（根据配置重置对应的存储）"""
+        if self.enable_deduplication:
+            self.deduplicator.reset()
+        else:
+            self.accumulated_text = ""
     
     def _recognition_thread_func(self):
         """流式ASR识别线程函数"""
@@ -563,8 +603,8 @@ class FunASRStream:
                             if res and len(res) > 0:
                                 new_text = res[0].get('text', '').strip()
                                 if new_text:
-                                    # 使用去重器处理
-                                    full_text = self.deduplicator.process(new_text)
+                                    # 处理文本（根据配置决定是否使用去重）
+                                    full_text = self._process_text(new_text)
                                     self.partial_result = full_text
                                     
                                     # 更新文本长度（有新文本）
@@ -640,9 +680,9 @@ class FunASRStream:
                     if res and len(res) > 0:
                         final_chunk_text = res[0].get('text', '').strip()
                         if final_chunk_text:
-                            self.final_result = self.deduplicator.process(final_chunk_text)
+                            self.final_result = self._process_text(final_chunk_text)
                         else:
-                            self.final_result = self.deduplicator.get_text()
+                            self.final_result = self._get_accumulated_text()
                         
                         # 提取置信度
                         confidence = self._extract_confidence(res[0])
@@ -660,7 +700,7 @@ class FunASRStream:
                             except Exception as e:
                                 self._publish_log("ERROR", f"最终结果回调函数错误: {e}", indent=1)
                     else:
-                        self.final_result = self.deduplicator.get_text()
+                        self.final_result = self._get_accumulated_text()
                         
                         # 发送ASR最终结果事件
                         self._send_final_result_events(self.final_result, None)
@@ -674,7 +714,7 @@ class FunASRStream:
                         
                 except Exception as e:
                     self._publish_log("ERROR", f"最终识别错误: {e}", indent=1)
-                    self.final_result = self.deduplicator.get_text()
+                    self.final_result = self._get_accumulated_text()
                     
                     # 发送ASR最终结果事件
                     self._send_final_result_events(self.final_result, None)
@@ -701,11 +741,11 @@ class FunASRStream:
                             if res and len(res) > 0:
                                 final_chunk_text = res[0].get('text', '').strip()
                                 if final_chunk_text:
-                                    self.final_result = self.deduplicator.process(final_chunk_text)
+                                    self.final_result = self._process_text(final_chunk_text)
                                 else:
-                                    self.final_result = self.deduplicator.get_text()
+                                    self.final_result = self._get_accumulated_text()
                             else:
-                                self.final_result = self.deduplicator.get_text()
+                                self.final_result = self._get_accumulated_text()
                             
                             # 提取置信度
                             confidence = None
@@ -726,7 +766,7 @@ class FunASRStream:
                                     self._publish_log("ERROR", f"最终结果回调函数错误: {e}", indent=1)
                             
                         except Exception as e:
-                            self.final_result = self.deduplicator.get_text()
+                            self.final_result = self._get_accumulated_text()
                             
                             # 发送ASR最终结果事件
                             self._send_final_result_events(self.final_result, None)
