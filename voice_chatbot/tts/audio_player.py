@@ -78,7 +78,7 @@ class AudioPlayer:
         # 流式输出状态（用于同一行更新）
         self._last_logged_text = ""  # 上次输出的文本
         
-        self._publish_log("INFO", "音频播放器初始化完成")
+        self._publish_log("DEBUG", "音频播放器初始化完成")
     
     def _init_mixer(self):
         """初始化pygame.mixer（只初始化一次）"""
@@ -266,7 +266,7 @@ class AudioPlayer:
                     self._current_channel.pause()
                     self._status = PlaybackStatus.PAUSED
                     self._pause_start_time = time.time()
-                    self._publish_log("INFO", "播放已暂停", indent=1)
+                    self._publish_log("DEBUG", "播放已暂停", indent=1)
                     return True
             except Exception as e:
                 self._publish_log("ERROR", f"暂停播放失败: {e}", indent=1)
@@ -309,7 +309,7 @@ class AudioPlayer:
                         self._total_pause_duration += pause_duration
                         self._pause_start_time = None
                     
-                    self._publish_log("INFO", "播放已恢复", indent=1)
+                    self._publish_log("DEBUG", "播放已恢复", indent=1)
                     return True
             except Exception as e:
                 self._publish_log("ERROR", f"恢复播放失败: {e}", indent=1)
@@ -354,7 +354,7 @@ class AudioPlayer:
                 self._play_start_time = None
                 self._pause_start_time = None
                 self._total_pause_duration = 0.0
-                self._publish_log("INFO", "播放已停止", indent=1)
+                self._publish_log("DEBUG", "播放已停止", indent=1)
                 return True
             except Exception as e:
                 self._publish_log("ERROR", f"停止播放失败: {e}", indent=1)
@@ -369,7 +369,7 @@ class AudioPlayer:
         停止当前播放，清理pygame.mixer资源
         """
         try:
-            self._publish_log("INFO", "开始清理音频播放器资源", indent=0)
+            self._publish_log("DEBUG", "开始清理音频播放器资源", indent=0)
             
             # 停止当前播放
             with self._state_lock:
@@ -392,7 +392,7 @@ class AudioPlayer:
             # 清理pygame.mixer（可选，因为可能被其他地方使用）
             # 注意：不调用 pygame.mixer.quit()，因为可能影响其他模块
             
-            self._publish_log("INFO", "音频播放器资源清理完成", indent=0)
+            self._publish_log("DEBUG", "音频播放器资源清理完成", indent=0)
         except Exception as e:
             self._publish_log("ERROR", f"清理音频播放器资源时出错: {e}", indent=1)
             import traceback
@@ -464,7 +464,7 @@ class AudioPlayer:
                 self._total_pause_duration = 0.0
                 self._last_logged_text = ""  # 重置流式输出状态（开始新的播放）
             
-            self._publish_log("INFO", f"开始播放 [任务ID: {task_id}, 时长: {self._audio_duration:.2f}秒]", indent=1)
+            self._publish_log("DEBUG", f"开始播放 [任务ID: {task_id}, 时长: {self._audio_duration:.2f}秒]", indent=1)
             
             # 等待播放完成或被打断
             while True:

@@ -302,11 +302,12 @@ class Logger:
         """
         level_upper = level.upper()
         
-        # 检查级别过滤（黑名单）
-        if level_upper in self.filtered_levels:
+        # 检查级别过滤（白名单：只输出在 filtered_levels 中的级别）
+        # 如果 filtered_levels 不为空，则只有在该列表中的级别才输出
+        if self.filtered_levels and level_upper not in self.filtered_levels:
             return False
         
-        # 检查类别过滤（黑名单）
+        # 检查类别过滤（黑名单：在 filtered_categories 中的类别不输出）
         if category and category.upper() in self.filtered_categories:
             return False
         

@@ -180,7 +180,7 @@ class EdgeTTSEngine:
         self._session: Optional[aiohttp.ClientSession] = None
         self._session_lock = threading.Lock()
         
-        self._publish_log("INFO", f"Edge TTS引擎初始化完成 [缓存: {'启用' if self.cache_enabled else '禁用'}, 会话复用: {'启用' if self.enable_session_reuse else '禁用'}, 文件缓存: {'启用' if self.tts_file_cache_enabled else '禁用'}, 自动修复: {'启用' if self.tts_file_cache_auto_repair else '禁用'}]")
+        self._publish_log("DEBUG", f"Edge TTS引擎初始化完成 [缓存: {'启用' if self.cache_enabled else '禁用'}, 会话复用: {'启用' if self.enable_session_reuse else '禁用'}, 文件缓存: {'启用' if self.tts_file_cache_enabled else '禁用'}, 自动修复: {'启用' if self.tts_file_cache_auto_repair else '禁用'}]")
         
         # 检查缓存文件（根据配置决定是否自动修复）
         if self._file_cache:
@@ -296,7 +296,7 @@ class EdgeTTSEngine:
         
         清理Edge TTS相关的asyncio资源和缓存
         """
-        log_info("TTS", "清理TTS引擎资源", indent=0)
+        log_debug("TTS", "清理TTS引擎资源", indent=0)
         
         # 清理缓存
         if self._cache:
@@ -645,7 +645,7 @@ class EdgeTTSEngine:
             cached_audio = self._file_cache.load(text, voice)
             if cached_audio is not None:
                 # 缓存命中，发送缓存命中事件
-                self._publish_log("INFO", f"缓存命中，跳过TTS生成 [文本: {text[:50]}...]", indent=1)
+                self._publish_log("DEBUG", f"缓存命中，跳过TTS生成 [文本: {text[:50]}...]", indent=1)
                 if self.event_bus:
                     try:
                         cache_event = create_event(
@@ -792,7 +792,7 @@ class EdgeTTSEngine:
             self._cache.clear()
             self._cache_hits = 0
             self._cache_misses = 0
-            self._publish_log("INFO", "缓存已清空")
+            self._publish_log("DEBUG", "缓存已清空")
     
     def _publish_log(self, level: str, message: str, indent: int = 0):
         """

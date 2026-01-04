@@ -271,16 +271,16 @@ class FunASRStream:
         # 预加载模型（如果配置启用）
         self.preload_model = config.get("asr.preload_model", True)
         if self.preload_model:
-            self._publish_log("INFO", "开始预加载ASR模型...")
+            self._publish_log("DEBUG", "开始预加载ASR模型...")
             try:
                 if self._load_model():
-                    self._publish_log("INFO", "ASR模型预加载完成")
+                    self._publish_log("DEBUG", "ASR模型预加载完成")
                 else:
                     self._publish_log("WARN", "ASR模型预加载失败，将在首次使用时重试")
             except Exception as e:
                 self._publish_log("WARN", f"ASR模型预加载出错: {e}，将在首次使用时重试")
         
-        self._publish_log("INFO", "FunASR流式识别器初始化完成")
+        self._publish_log("DEBUG", "FunASR流式识别器初始化完成")
     
     def _load_model(self) -> bool:
         """
@@ -302,7 +302,7 @@ class FunASRStream:
         for retry_count in range(max_retries):
             try:
                 if self.model_path:
-                    self._publish_log("INFO", f"正在加载流式ASR模型: {self.model_path} [尝试 {retry_count + 1}/{max_retries}]")
+                    self._publish_log("DEBUG", f"正在加载流式ASR模型: {self.model_path} [尝试 {retry_count + 1}/{max_retries}]")
                     try:
                         self.asr_model = AutoModel(model=self.model_path, device="cuda")
                     except Exception as e:
@@ -320,7 +320,7 @@ class FunASRStream:
                         self.asr_model = AutoModel(model="paraformer-zh-streaming", device="cpu")
                 
                 self.model_loaded = True
-                self._publish_log("INFO", "流式ASR模型加载完成")
+                self._publish_log("DEBUG", "流式ASR模型加载完成")
                 return True
             except Exception as e:
                 last_error = e
@@ -351,8 +351,7 @@ class FunASRStream:
             import time
             start_time = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
             self._publish_log("INFO", f"ASR识别开始 - 时间: {start_time}")
-            self._publish_log("DEBUG", f"任务ID: {self.current_task_id}", indent=1)
-            self._publish_log("DEBUG", f"初始speaking状态: True（等待VAD）", indent=1)
+            self._publish_log("DEBUG", f"任务ID: {self.current_task_id}, 初始speaking状态: True（等待VAD）", indent=1)
 
             # 检查模型是否已加载（如果已加载，直接使用，不再调用_load_model）
             if not self.model_loaded or self.asr_model is None:
@@ -395,7 +394,7 @@ class FunASRStream:
                 except Exception as e:
                     self._publish_log("ERROR", f"发送ASR_RECOGNITION_START事件错误: {e}", indent=1)
 
-            self._publish_log("INFO", "启动流式识别")
+            self._publish_log("DEBUG", "启动流式识别")
             return True
     
     def stop_recognition(self):
@@ -407,14 +406,10 @@ class FunASRStream:
             # 记录停止识别的时间和原因
             import time
             stop_time = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
-            self._publish_log("INFO", f"ASR停止识别调用 - 时间: {stop_time}")
-            self._publish_log("INFO", f"停止原因: 外部调用stop_recognition()", indent=1)
-            self._publish_log("DEBUG", f"调用前speaking状态: {self.speaking}", indent=1)
-            self._publish_log("DEBUG", f"调用前recognizing状态: {self.recognizing}", indent=1)
-            self._publish_log("DEBUG", f"当前部分结果: {self.partial_result}", indent=1)
+            self._publish_log("DEBUG", f"ASR停止识别调用 - 时间: {stop_time}, 原因: 外部调用stop_recognition()", indent=1)
+            self._publish_log("DEBUG", f"调用前speaking={self.speaking}, recognizing={self.recognizing}, 部分结果: {self.partial_result}", indent=1)
 
             self.speaking = False
-            self._publish_log("INFO", "停止识别", indent=1)
             self._publish_log("DEBUG", f"设置speaking=False，识别线程将退出主循环", indent=1)
     
     def feed_audio(self, audio_data: np.ndarray):
@@ -540,9 +535,7 @@ class FunASRStream:
         """流式ASR识别线程函数"""
         import time
         thread_start_time = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
-        self._publish_log("INFO", f"识别线程启动 - 时间: {thread_start_time}")
-        self._publish_log("DEBUG", f"线程ID: {threading.get_ident()}", indent=1)
-        self._publish_log("DEBUG", f"初始状态: recognizing={self.recognizing}, speaking={self.speaking}", indent=1)
+        self._publish_log("DEBUG", f"识别线程启动 - 时间: {thread_start_time}, 线程ID: {threading.get_ident()}, 初始状态: recognizing={self.recognizing}, speaking={self.speaking}")
 
         try:
             buffer = np.array([], dtype=np.float32)
@@ -572,12 +565,7 @@ class FunASRStream:
                                 import time
                                 end_time = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
                                 current_text = self.partial_result
-                                self._publish_log("INFO", f"ASR结束判定 - 时间: {end_time}", indent=1)
-                                self._publish_log("INFO", f"结束原因: VAD判定speaking=False（用户停止说话）", indent=1)
-                                self._publish_log("INFO", f"已处理音频chunks: {chunk_count}个", indent=1)
-                                self._publish_log("INFO", f"当前识别文本: {current_text}", indent=1)
-                                self._publish_log("INFO", f"当前文本长度: {len(current_text)}字符", indent=1)
-                                self._publish_log("DEBUG", f"缓冲区剩余音频: {len(buffer)}采样点", indent=1)
+                                self._publish_log("DEBUG", f"ASR结束判定 - 时间: {end_time}, 原因: VAD判定speaking=False（用户停止说话）, 已处理{chunk_count}个chunk, 当前文本: {current_text}, 缓冲区剩余: {len(buffer)}采样点", indent=1)
                                 # 语音已结束，处理剩余音频
                                 break
                         continue
@@ -784,13 +772,8 @@ class FunASRStream:
             # 输出最终结果
             import time
             final_time = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
-            self._publish_log("INFO", f"ASR识别完成 - 时间: {final_time}")
-            self._publish_log("INFO", f"最终识别文本: {self.final_result}")
-            self._publish_log("INFO", f"最终文本长度: {len(self.final_result)}字符")
-            self._publish_log("DEBUG", f"共处理 {chunk_count} 个chunk", indent=1)
-            self._publish_log("DEBUG", f"音频chunk_size配置: {self.chunk_size}", indent=1)
-            self._publish_log("DEBUG", f"encoder_chunk_look_back: {self.encoder_chunk_look_back}", indent=1)
-            self._publish_log("DEBUG", f"decoder_chunk_look_back: {self.decoder_chunk_look_back}", indent=1)
+            self._publish_log("INFO", f"ASR识别完成 - 时间: {final_time}, 最终文本: {self.final_result}, 长度: {len(self.final_result)}字符")
+            self._publish_log("DEBUG", f"共处理 {chunk_count} 个chunk, chunk_size={self.chunk_size}, encoder_chunk_look_back={self.encoder_chunk_look_back}, decoder_chunk_look_back={self.decoder_chunk_look_back}", indent=1)
         except Exception as e:
             self._publish_log("ERROR", f"识别线程发生未捕获的异常: {e}")
             import traceback
@@ -802,7 +785,7 @@ class FunASRStream:
                 self.speaking = False
                 self.asr_cache = {}
             
-            self._publish_log("INFO", "识别线程结束")
+            self._publish_log("DEBUG", "识别线程结束")
     
     def _send_final_result_events(self, text: str, confidence: Optional[float]):
         """

@@ -180,7 +180,7 @@ class MeloTTSEngine:
         # 初始化模型（加载指定语言的模型）
         self._init_model()
         
-        self._publish_log("INFO", f"MeloTTS引擎初始化完成 [API: {self.api_url}{self.api_endpoint}, 模型语言: {self.model_language}, 缓存: {'启用' if self.cache_enabled else '禁用'}, 文件缓存: {'启用' if self.tts_file_cache_enabled else '禁用'}, 自动修复: {'启用' if self.tts_file_cache_auto_repair else '禁用'}]")
+        self._publish_log("DEBUG", f"MeloTTS引擎初始化完成 [API: {self.api_url}{self.api_endpoint}, 模型语言: {self.model_language}, 缓存: {'启用' if self.cache_enabled else '禁用'}, 文件缓存: {'启用' if self.tts_file_cache_enabled else '禁用'}, 自动修复: {'启用' if self.tts_file_cache_auto_repair else '禁用'}]")
         
         # 检查缓存文件（根据配置决定是否自动修复）
         if self._file_cache:
@@ -231,7 +231,7 @@ class MeloTTSEngine:
             result = response.json()
             
             if result.get("success", False):
-                self._publish_log("INFO", f"成功加载 {self.model_language} 模型", indent=1)
+                self._publish_log("DEBUG", f"成功加载 {self.model_language} 模型", indent=1)
             else:
                 self._publish_log("WARN", f"加载 {self.model_language} 模型失败: {result.get('message', '未知错误')}", indent=1)
         except requests.exceptions.RequestException as e:
@@ -272,7 +272,7 @@ class MeloTTSEngine:
         
         清理MeloTTS相关的HTTP会话和缓存
         """
-        log_info("TTS", "清理TTS引擎资源", indent=0)
+        log_debug("TTS", "清理TTS引擎资源", indent=0)
         
         # 清理缓存
         if self._cache:
@@ -594,7 +594,7 @@ class MeloTTSEngine:
             cached_audio = self._file_cache.load(text, voice)
             if cached_audio is not None:
                 # 缓存命中，发送缓存命中事件
-                self._publish_log("INFO", f"缓存命中，跳过TTS生成 [文本: {text[:50]}...]", indent=1)
+                self._publish_log("DEBUG", f"缓存命中，跳过TTS生成 [文本: {text[:50]}...]", indent=1)
                 if self.event_bus:
                     try:
                         cache_event = create_event(
@@ -761,7 +761,7 @@ class MeloTTSEngine:
             self._cache.clear()
             self._cache_hits = 0
             self._cache_misses = 0
-            self._publish_log("INFO", "缓存已清空")
+            self._publish_log("DEBUG", "缓存已清空")
     
     def _publish_log(self, level: str, message: str, indent: int = 0):
         """

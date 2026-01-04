@@ -45,7 +45,7 @@ class TTSFileCache:
         if self.enabled:
             try:
                 self.cache_dir.mkdir(parents=True, exist_ok=True)
-                log_info("TTS", f"TTS文件缓存目录: {self.cache_dir.absolute()} [引擎: {engine_name}, 最大字词长度: {self.max_length}]", indent=0)
+                log_debug("TTS", f"TTS文件缓存目录: {self.cache_dir.absolute()} [引擎: {engine_name}, 最大字词长度: {self.max_length}]", indent=0)
             except Exception as e:
                 log_error("TTS", f"创建缓存目录失败: {e}", indent=0)
                 self.enabled = False
@@ -201,7 +201,7 @@ class TTSFileCache:
                 
                 # 从文件加载音频
                 audio = AudioSegment.from_mp3(str(cache_path))
-                log_info("TTS", f"从缓存加载音频: {voice}/{cache_path.name} [长度: {len(audio)}ms]", indent=1)
+                log_debug("TTS", f"从缓存加载音频: {voice}/{cache_path.name} [长度: {len(audio)}ms]", indent=1)
                 return audio
             except Exception as e:
                 log_warn("TTS", f"加载缓存文件失败: {e}", indent=1)
@@ -244,7 +244,7 @@ class TTSFileCache:
                 index[text] = filename
                 self._save_index(voice, index)
                 
-                log_info("TTS", f"保存音频到缓存: {voice}/{filename} [长度: {len(audio)}ms]", indent=1)
+                log_debug("TTS", f"保存音频到缓存: {voice}/{filename} [长度: {len(audio)}ms]", indent=1)
                 return True
             except Exception as e:
                 log_error("TTS", f"保存缓存文件失败: {e}", indent=1)
@@ -361,7 +361,7 @@ class TTSFileCache:
                             # 从内存中删除该语音的索引
                             if voice in self._indexes:
                                 del self._indexes[voice]
-                        log_info("TTS", f"已清空语音 {voice} 的缓存，删除 {deleted_count} 个文件", indent=0)
+                        log_debug("TTS", f"已清空语音 {voice} 的缓存，删除 {deleted_count} 个文件", indent=0)
                 else:
                     # 清空所有缓存
                     for voice_dir in self.cache_dir.iterdir():
@@ -385,7 +385,7 @@ class TTSFileCache:
                     
                     # 清空内存中的索引
                     self._indexes.clear()
-                    log_info("TTS", f"已清空所有缓存，删除 {deleted_count} 个文件", indent=0)
+                    log_debug("TTS", f"已清空所有缓存，删除 {deleted_count} 个文件", indent=0)
             except Exception as e:
                 log_error("TTS", f"清空缓存失败: {e}", indent=0)
     
@@ -433,14 +433,14 @@ class TTSFileCache:
             
             # 报告统计信息
             if total_index_count > 0:
-                log_info("TTS", f"缓存检查 [{self.engine_name}]：共 {total_index_count} 条缓存记录", indent=0)
+                log_debug("TTS", f"缓存检查 [{self.engine_name}]：共 {total_index_count} 条缓存记录", indent=0)
             
             if total_missing > 0:
                 log_warn("TTS", f"发现 {total_missing} 个缺失的缓存文件 [{self.engine_name}]（索引中有记录但文件不存在）", indent=1)
                 
                 # 如果提供了生成函数，启动后台线程修复
                 if generate_func is not None:
-                    log_info("TTS", f"启动后台线程重新生成 {total_missing} 个缺失的缓存文件 [{self.engine_name}]", indent=1)
+                    log_debug("TTS", f"启动后台线程重新生成 {total_missing} 个缺失的缓存文件 [{self.engine_name}]", indent=1)
                     repair_thread = threading.Thread(
                         target=self._repair_missing_files_in_thread,
                         args=(missing_items, generate_func),
@@ -449,7 +449,7 @@ class TTSFileCache:
                     )
                     repair_thread.start()
             elif total_index_count > 0:
-                log_info("TTS", f"所有缓存文件完整 [{self.engine_name}]", indent=1)
+                log_debug("TTS", f"所有缓存文件完整 [{self.engine_name}]", indent=1)
                     
         except Exception as e:
             log_error("TTS", f"检查缓存文件失败: {e}", indent=0)
@@ -482,7 +482,7 @@ class TTSFileCache:
                     if success:
                         repaired_count += 1
                         if repaired_count % 10 == 0:
-                            log_info("TTS", f"已修复 {repaired_count}/{len(missing_items)} 个缺失文件", indent=2)
+                            log_debug("TTS", f"已修复 {repaired_count}/{len(missing_items)} 个缺失文件", indent=2)
                     else:
                         failed_count += 1
                         log_warn("TTS", f"保存缓存失败: {voice}/{text[:30]}...", indent=2)
@@ -491,7 +491,7 @@ class TTSFileCache:
                     failed_count += 1
                     log_error("TTS", f"修复文件失败 {voice}/{text[:30]}...: {e}", indent=2)
             
-            log_info("TTS", f"缓存修复完成 [{self.engine_name}]：成功 {repaired_count} 个，失败 {failed_count} 个", indent=1)
+            log_debug("TTS", f"缓存修复完成 [{self.engine_name}]：成功 {repaired_count} 个，失败 {failed_count} 个", indent=1)
             
         except Exception as e:
             log_error("TTS", f"缓存修复线程异常: {e}", indent=1)
