@@ -2405,15 +2405,48 @@ class DialogueManager:
                     # 如果pending_interrupt为True且ASR验证通过，则不播放
                     # 如果pending_interrupt为False或ASR验证失败，则继续播放
                     log_info("MANAGER", "首次播放前检测到LISTENING状态，等待ASR验证", indent=1)
-                    # 等待一小段时间，让ASR验证完成
-                    time.sleep(0.1)
                     
-                    # 检查是否应该继续播放（如果pending_interrupt为True，说明被打断，不播放）
-                    log_info("MANAGER", "[LOCK-017] _start_audio_player_thread() 首次播放前检查打断 正在获取 interrupt_lock", indent=1)
-                    with self.interrupt_lock:
-                        if self.pending_interrupt:
-                            log_info("MANAGER", "检测到用户打断，取消播放", indent=1)
+                    # 等待最多1秒，检查状态转换（包括场景6的处理）
+                    max_wait_time = 1.0
+                    check_interval = 0.05
+                    waited_time = 0.0
+                    should_play = False
+                    
+                    while waited_time < max_wait_time:
+                        time.sleep(check_interval)
+                        waited_time += check_interval
+                        
+                        # 检查副系统状态
+                        sub_state = self.state_manager.get_sub_state()
+                        
+                        # 如果副系统从PAUSED变为PROCESSING，说明场景6处理完成（误判被纠正），继续播放
+                        if sub_state == SubSystemState.PROCESSING:
+                            log_info("MANAGER", f"ASR验证完成（误判），副系统状态为{sub_state.value}，继续播放", indent=1)
+                            should_play = True
+                            break
+                        
+                        # 检查pending_interrupt是否被清除
+                        pending_interrupt = self._get_pending_interrupt_safe()
+                        if not pending_interrupt:
+                            log_info("MANAGER", "打断标记已清除，继续播放", indent=1)
+                            should_play = True
+                            break
+                        
+                        log_debug("MANAGER", f"等待ASR验证... waited={waited_time:.2f}s, sub_state={sub_state.value}, pending_interrupt={pending_interrupt}", indent=2)
+                    
+                    # 最终检查：如果超时后仍然是打断状态，说明是真实打断，取消播放
+                    if not should_play:
+                        sub_state = self.state_manager.get_sub_state()
+                        pending_interrupt = self._get_pending_interrupt_safe()
+                        log_info("MANAGER", f"[LOCK-017] _start_audio_player_thread() 首次播放前最终检查: sub_state={sub_state.value}, pending_interrupt={pending_interrupt}, waited={waited_time:.2f}s", indent=1)
+                        
+                        # 如果pending_interrupt仍为True且副系统仍是PAUSED，确认是真实打断
+                        if pending_interrupt and sub_state == SubSystemState.PAUSED:
+                            log_info("MANAGER", "检测到真实打断（PAUSED状态），取消播放", indent=1)
                             return
+                        # 如果pending_interrupt为False或副系统变为PROCESSING，说明误判被纠正，继续播放
+                        else:
+                            log_info("MANAGER", "误判被纠正，继续播放", indent=1)
                 
                 # 首次播放时转换状态
                 first_audio = True
