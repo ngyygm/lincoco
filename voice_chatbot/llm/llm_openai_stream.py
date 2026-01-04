@@ -347,9 +347,22 @@ class LLMStreamGenerator:
         self.token_stats = TokenUsageStats()
         
         # 从配置获取LLM参数
-        self.api_base = config.get("llm.api_base", "http://127.0.0.1:5000/v1")
-        self.api_key = config.get("llm.api_key", "sk-1234")
-        self.model_name = config.get("llm.model_name", "Qwen3-8B-GGUF.gguf")
+        self.provider = config.get("llm.provider", "openai")  # 服务提供商：openai 或 ollama
+        
+        # 根据provider选择不同的配置（从engines中读取）
+        if self.provider == "ollama":
+            # 使用Ollama配置
+            self.api_base = config.get("llm.engines.ollama.api_base", "http://127.0.0.1:11434/v1")
+            self.api_key = config.get("llm.engines.ollama.api_key", "")
+            # 如果api_key为空，使用默认值（Ollama通常不需要key，但某些客户端可能需要）
+            if not self.api_key:
+                self.api_key = "ollama"
+            self.model_name = config.get("llm.engines.ollama.model_name", "llama2")
+        else:
+            # 使用OpenAI配置（默认）
+            self.api_base = config.get("llm.engines.openai.api_base", "http://127.0.0.1:5000/v1")
+            self.api_key = config.get("llm.engines.openai.api_key", "sk-1234")
+            self.model_name = config.get("llm.engines.openai.model_name", "gpt-3.5-turbo")
         self.max_tokens = config.get("llm.max_tokens", 512)
         self.temperature = config.get("llm.temperature", 0.7)
         self.min_sentence_length = config.get("llm.min_sentence_length", 15)
@@ -382,7 +395,7 @@ class LLMStreamGenerator:
             self.use_new_api = False
             self.openai_client = None
         
-        log_info("LLM", f"初始化完成 [API: {'新版本' if self.use_new_api else '旧版本'}, 模型: {self.model_name}]", indent=0)
+        log_info("LLM", f"初始化完成 [引擎: {self.provider}, 模型: {self.model_name}, API: {'新版本' if self.use_new_api else '旧版本'}, API Base: {self.api_base}]", indent=0)
     
     def cleanup(self):
         """
@@ -623,7 +636,7 @@ class LLMStreamGenerator:
             Exception: 生成过程中的异常
         """
         stream_start_time = time.time()
-        log_info("LLM", "开始流式生成", indent=0)
+        log_info("LLM", f"开始流式生成 [引擎: {self.provider}, 模型: {self.model_name}]", indent=0)
         
         # 检查任务是否被取消
         if self._check_task_cancelled(task_id):
@@ -634,7 +647,7 @@ class LLMStreamGenerator:
         messages = self._build_messages(user_input, images=images)
         
         # 输出messages内容（格式化显示）
-        log_info("LLM", "准备推理", indent=0)
+        log_info("LLM", f"准备推理 [引擎: {self.provider}, 模型: {self.model_name}]", indent=0)
         log_info("LLM", f"Messages ({len(messages)}条):", indent=1)
         
         # 统计不同类型消息的数量
@@ -887,13 +900,13 @@ class LLMStreamGenerator:
                     error_str = str(e).lower()
                     if any(keyword in error_str for keyword in ['timeout', 'connection', 'network', 'unreachable', 'refused']):
                         should_retry = True
-                        log_warn("LLM", f"API调用错误（可重试）: {e} [重试 {retry_count + 1}/{max_retries}]", indent=0)
+                        log_warn("LLM", f"API调用错误（可重试）[引擎: {self.provider}, 模型: {self.model_name}]: {e} [重试 {retry_count + 1}/{max_retries}]", indent=0)
                     else:
                         # 其他错误（如API错误、参数错误等）不重试
-                        log_error("LLM", f"API调用错误（不可重试）: {e}", indent=0)
+                        log_error("LLM", f"API调用错误（不可重试）[引擎: {self.provider}, 模型: {self.model_name}]: {e}", indent=0)
                         break
                 else:
-                    log_error("LLM", f"API调用错误（已达最大重试次数）: {e}", indent=0)
+                    log_error("LLM", f"API调用错误（已达最大重试次数）[引擎: {self.provider}, 模型: {self.model_name}]: {e}", indent=0)
                 
                 if should_retry:
                     # 等待后重试
@@ -1051,14 +1064,14 @@ class LLMStreamGenerator:
             stream_elapsed = time.time() - stream_start_time
 
             full_response_text = full_response_text.lstrip()
-            log_info("LLM", f"流式生成完成，共{sentence_count}个句子 [耗时: {stream_elapsed*1000:.1f}ms]", indent=0)
+            log_info("LLM", f"流式生成完成 [引擎: {self.provider}, 模型: {self.model_name}, 共{sentence_count}个句子, 耗时: {stream_elapsed*1000:.1f}ms]", indent=0)
             log_info("LLM", f"完整回答: {full_response_text}", indent=1)
             
             return full_response_text
             
         except Exception as e:
             stream_elapsed = time.time() - stream_start_time
-            log_error("LLM", f"流式生成错误: {e} [耗时: {stream_elapsed*1000:.1f}ms]", indent=0)
+            log_error("LLM", f"流式生成错误 [引擎: {self.provider}, 模型: {self.model_name}]: {e} [耗时: {stream_elapsed*1000:.1f}ms]", indent=0)
             # 如果已经生成了部分内容，返回已生成的内容
             if full_response_text:
                 log_warn("LLM", f"返回已生成的部分内容: {full_response_text[:50]}...", indent=1)

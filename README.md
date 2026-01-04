@@ -5,7 +5,7 @@
 ## ✨ 核心特性
 
 - 🎤 **实时语音识别**：基于 FunASR 的流式语音识别，支持预缓存机制避免丢失开头
-- 💬 **智能对话**：集成 OpenAI API，支持流式文本生成和句子分割
+- 💬 **智能对话**：支持 OpenAI 和 Ollama 本地服务，支持流式文本生成和句子分割
 - 🔊 **语音合成**：支持 Edge TTS、CosyVoice3 和 MeloTTS，支持流式和非流式模式
 - 🌐 **WebSocket 网页端**：支持通过浏览器进行实时语音对话，无需服务器端硬件设备
 - 📝 **TTS 流式显示同步**：网页端机器人消息与 TTS 音频播放进度实时同步
@@ -21,8 +21,6 @@
 
 ```
 麦克风采集(含回声消除) → VAD → ASR → 对话调度器 → LLM流式生成 → TTS+播放
-                                                          ↓
-                                                    播放参考信号 → 麦克风(回声消除)
 ```
 
 ### 线程架构
@@ -64,9 +62,18 @@ pip install -r requirements.txt
 
 创建 `.env` 文件（参考 `.env.example`）并配置必要的参数：
 ```env
-# OpenAI API 配置
-OPENAI_API_KEY=your_api_key_here
-OPENAI_API_BASE=https://api.openai.com/v1
+# LLM 服务配置
+VOICE_CHATBOT_LLM_PROVIDER=openai  # 或 ollama
+
+# OpenAI 引擎配置
+VOICE_CHATBOT_LLM_ENGINES_OPENAI_API_BASE=https://api.openai.com/v1
+VOICE_CHATBOT_LLM_ENGINES_OPENAI_API_KEY=your_api_key_here
+VOICE_CHATBOT_LLM_ENGINES_OPENAI_MODEL_NAME=gpt-3.5-turbo
+
+# Ollama 引擎配置（当 provider=ollama 时使用）
+VOICE_CHATBOT_LLM_ENGINES_OLLAMA_API_BASE=http://127.0.0.1:11434/v1
+VOICE_CHATBOT_LLM_ENGINES_OLLAMA_API_KEY=  # 本地服务通常不需要，留空即可
+VOICE_CHATBOT_LLM_ENGINES_OLLAMA_MODEL_NAME=llama2
 
 # 其他配置...
 ```
@@ -173,11 +180,29 @@ lincoco/
 
 #### LLM 配置
 ```python
-llm.persona_name = "default"          # 默认人设名称
-llm.user_name = "用户"                # 用户名
+llm.provider = "openai"               # LLM服务提供商：openai 或 ollama
 llm.max_tokens = 512                  # 最大生成token数
 llm.temperature = 0.7                 # 生成温度
+
+# OpenAI 引擎配置
+llm.engines.openai.api_base = "https://api.openai.com/v1"  # OpenAI API基础URL
+llm.engines.openai.api_key = "your_api_key_here"  # OpenAI API密钥
+llm.engines.openai.model_name = "gpt-3.5-turbo"  # 模型名称
+
+# Ollama 引擎配置
+llm.engines.ollama.api_base = "http://127.0.0.1:11434/v1"  # Ollama API地址（默认本地服务）
+llm.engines.ollama.api_key = ""  # Ollama API密钥（本地服务通常不需要，留空即可）
+llm.engines.ollama.model_name = "gemma3:27b"  # 模型名称（格式：模型名:标签，如 "gemma3:27b"、"llama2"、"qwen" 等）
 ```
+
+**使用 Ollama 本地服务**：
+1. 确保已安装并运行 Ollama 服务（默认端口 11434）
+2. 在配置中设置 `llm.provider = "ollama"`
+3. 设置 `llm.engines.ollama.model_name` 为你已下载的 Ollama 模型名称：
+   - 如果使用 `ollama run gemma3:27b`，则配置为 `"gemma3:27b"`
+   - 如果使用 `ollama run llama2`，则配置为 `"llama2"`
+   - 模型名称格式：`模型名:标签`（如果有标签）或 `模型名`（如果没有标签）
+4. 设置 `llm.engines.ollama.api_base` 为你的 Ollama 服务地址（如果不在本地或端口不同）
 
 #### TTS 配置
 ```python
@@ -290,6 +315,7 @@ dialogue.audio_stop_delay = 0.3       # 打断延迟验证时间（秒）
 - [Edge TTS](https://github.com/rany2/edge-tts) - 语音合成服务
 - [MeloTTS](https://github.com/myshell-ai/MeloTTS) - 高质量多语言语音合成
 - [OpenAI API](https://platform.openai.com/docs) - 大语言模型 API
+- [Ollama](https://ollama.ai/) - 本地大语言模型运行环境
 
 ---
 
@@ -297,6 +323,13 @@ dialogue.audio_stop_delay = 0.3       # 打断延迟验证时间（秒）
 **维护者**: ngyygm
 
 ## 🆕 最新更新
+
+### 2026-01-04 - LLM 引擎支持和日志优化
+
+- ✨ **Ollama 本地服务支持**：新增对本地 Ollama 服务器的支持，可在配置中选择使用 OpenAI 或 Ollama
+- 🔧 **配置结构优化**：LLM 引擎配置重构为 `llm.engines` 结构，与 TTS 引擎配置保持一致
+- 📊 **日志增强**：所有 LLM 相关日志现在都会显示当前使用的引擎（openai/ollama）和模型名称，便于调试和监控
+- 📝 **配置示例更新**：更新了 README 中的配置说明，包含完整的 Ollama 配置示例
 
 ### 2026-01-04 - WebSocket 模式优化
 
