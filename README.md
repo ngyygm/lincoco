@@ -7,6 +7,8 @@
 - 🎤 **实时语音识别**：基于 FunASR 的流式语音识别，支持预缓存机制避免丢失开头
 - 💬 **智能对话**：集成 OpenAI API，支持流式文本生成和句子分割
 - 🔊 **语音合成**：支持 Edge TTS、CosyVoice3 和 MeloTTS，支持流式和非流式模式
+- 🌐 **WebSocket 网页端**：支持通过浏览器进行实时语音对话，无需服务器端硬件设备
+- 📝 **TTS 流式显示同步**：网页端机器人消息与 TTS 音频播放进度实时同步
 - 🎯 **打断机制**：支持延迟验证和 ASR 验证，实现自然的对话打断
 - 📝 **对话管理**：自动管理对话历史，支持输入合并和上下文管理
 - 🎭 **人设系统**：支持多个人设配置，支持运行时动态切换
@@ -77,7 +79,20 @@ conda activate voice
 python main.py
 ```
 
-**Gradio 网页界面 (推荐):**
+**WebSocket 网页端模式 (推荐):**
+```bash
+conda activate voice
+python web_start.py
+```
+或直接运行:
+```bash
+python web_server.py
+```
+启动后在浏览器中访问 `http://localhost:8000`
+
+详细使用说明请查看 [WEB_README.md](WEB_README.md)
+
+**Gradio 网页界面:**
 ```bash
 conda activate voice
 python gradio_web.py
@@ -97,9 +112,19 @@ python gradio_web.py
 
 ```
 lincoco/
-├── main.py                          # 主程序入口
+├── main.py                          # 主程序入口（命令行模式）
+├── web_server.py                    # WebSocket 服务器（网页端模式）
+├── web_start.py                     # WebSocket 启动脚本
 ├── requirements.txt                 # Python 依赖包
 ├── README.md                        # 项目说明文档
+├── WEB_README.md                    # 网页端使用说明
+│
+├── web/                             # 网页端前端文件
+│   └── static/                      # 静态资源
+│       ├── index.html              # 主页面
+│       ├── app.js                  # 前端主逻辑
+│       ├── pcmWorkletProcessor.js  # PCM 音频处理
+│       └── ttsPlaybackProcessor.js # TTS 播放处理
 │
 ├── voice_chatbot/                  # 核心模块目录
 │   ├── audio/                      # 音频输入模块
@@ -233,6 +258,7 @@ dialogue.audio_stop_delay = 0.3       # 打断延迟验证时间（秒）
 
 ## 📚 文档
 
+- [WEB_README.md](WEB_README.md) - 网页端使用说明
 - [PROJECT_OUTLINE.md](voice_chatbot/PROJECT_OUTLINE.md) - 详细的项目架构和功能说明
 - [REALTIME_INTERACTION_DESIGN.md](voice_chatbot/REALTIME_INTERACTION_DESIGN.md) - 实时语音交互架构设计文档
 - [DEVELOPMENT_LOG.md](voice_chatbot/DEVELOPMENT_LOG.md) - 开发日志
