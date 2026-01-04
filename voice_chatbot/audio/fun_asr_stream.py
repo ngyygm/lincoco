@@ -301,7 +301,7 @@ class FunASRStream:
                 if self.model_path:
                     self._publish_log("INFO", f"正在加载流式ASR模型: {self.model_path} [尝试 {retry_count + 1}/{max_retries}]")
                     try:
-                        self.asr_model = AutoModel(model=self.model_path, device="cuda")
+                        self.asr_model = AutoModel(model=self.model_path, device="cuda", trust_remote_code=True, disable_update=True)
                     except Exception as e:
                         # 如果CUDA失败，尝试使用CPU
                         self._publish_log("WARN", f"CUDA加载失败，尝试使用CPU: {e}", indent=1)

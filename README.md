@@ -70,10 +70,23 @@ OPENAI_API_BASE=https://api.openai.com/v1
 ```
 
 4. **运行程序**
+
+**命令行模式:**
 ```bash
 conda activate voice
 python main.py
 ```
+
+**Gradio 网页界面 (推荐):**
+```bash
+conda activate voice
+python gradio_web.py
+```
+或使用启动脚本:
+- Windows: `gradio_start.bat`
+- Linux/Mac: `./gradio_start.sh`
+
+详细使用说明请查看 [GRADIO_README.md](GRADIO_README.md)
 
 **注意**：
 - 如果配置中选择了 MeloTTS 引擎，程序会自动启动 MeloTTS API 服务（默认端口 8101）
@@ -254,10 +267,21 @@ dialogue.audio_stop_delay = 0.3       # 打断延迟验证时间（秒）
 
 ---
 
-**最后更新**: 2026-01-03  
+**最后更新**: 2026-01-04  
 **维护者**: ngyygm
 
 ## 🆕 最新更新
+
+### 2026-01-04 - WebSocket 模式优化
+
+- ✨ **TTS 流式显示同步**：网页端机器人消息流式输出内容与 TTS 音频播放进度同步，读多少字就显示多少字
+- 🔧 **播放时长获取修复**：修复了 WebSocket 模式下无法正确获取播放时长的问题，确保对话历史正确记录
+- 🐛 **句子重复修复**：修复了句子重复添加到 `completed_sentences` 和 `played_response_text` 的问题
+- 🐛 **对话历史重复修复**：修复了对话历史重复记录的问题，避免 LLM messages 中出现重复对话
+- 🐛 **最终结果重复修复**：修复了 TTS 正常播放完成后，用户输入新内容时重复发送最终结果的问题
+- ⏱️ **响应耗时分析优化**：统一了文本输入和语音识别的响应耗时分析起始时间点，确保时间记录一致
+
+### 2026-01-03 - 基础功能优化
 
 - ✨ **MeloTTS 自动启动**：程序启动时自动检测并启动 MeloTTS API 服务，无需手动操作
 - 🚀 **端口智能检测**：自动检测端口占用情况，避免重复启动服务

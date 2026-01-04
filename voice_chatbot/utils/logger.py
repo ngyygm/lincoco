@@ -112,8 +112,19 @@ def _enable_windows_ansi():
             # 如果失败，静默忽略（可能不支持或已启用）
             pass
     else:
-        # 非 Windows 系统通常默认支持 ANSI
-        _ansi_enabled = True
+        # 非 Windows 系统：检查是否输出到终端且支持 ANSI
+        # 如果输出被重定向到文件，则不启用颜色
+        if hasattr(sys.stdout, 'isatty') and sys.stdout.isatty():
+            # 检查环境变量 TERM 是否支持颜色
+            term = os.environ.get('TERM', '')
+            # 大多数现代终端都支持颜色（xterm, xterm-256color, screen, tmux 等）
+            if term and term != 'dumb':
+                _ansi_enabled = True
+            else:
+                _ansi_enabled = False
+        else:
+            # 输出被重定向，不启用颜色
+            _ansi_enabled = False
 
 
 # 初始化时启用 Windows ANSI 支持
@@ -365,11 +376,16 @@ class Logger:
         if sys.platform == 'win32' and not _ansi_enabled:
             _enable_windows_ansi()
         
+        # 检查是否输出到终端（而不是重定向到文件）
+        # 如果输出被重定向，则不使用颜色
+        is_tty = hasattr(sys.stdout, 'isatty') and sys.stdout.isatty()
+        output_message = colored_message if (is_tty and _ansi_enabled) else log_message
+        
         if inline:
             # 同一行更新（使用\r，不换行）
-            print(f"\r{colored_message}", end='', flush=True)
+            print(f"\r{output_message}", end='', flush=True)
         else:
-            print(colored_message, flush=True)
+            print(output_message, flush=True)
         
         # 输出到文件
         if self.log_file_enabled:

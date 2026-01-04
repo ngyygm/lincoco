@@ -662,6 +662,10 @@ class DialogueManager:
         # 记录ASR识别完成时间
         log_info("TIME", "记录ASR识别完成时间", indent=1)
         self.performance_timer.record_user_speech_end()
+        # ASR识别完成等同于VAD检测到语音活动结束（点击发送按钮）
+        # 记录VAD结束时间（会使用ASR识别完成时间，确保时间点一致）
+        log_info("TIME", "ASR识别完成，记录VAD结束时间（使用ASR识别完成时间）", indent=1)
+        self.performance_timer.record_vad_speech_end()
         
         self._handle_asr_result(text, confidence)
     
@@ -786,9 +790,18 @@ class DialogueManager:
                 log_info("MANAGER", f"[AUDIO_STOP-001] audio_player.stop() 返回: {stop_result}", indent=1)
         
             # 检查播放时长，决定是否记录历史
-            log_info("MANAGER", f"[HISTORY_CHECK-001] 开始检查播放时长: played_duration={played_duration:.2f}秒, 阈值={self.min_play_duration_to_record:.2f}秒", indent=1)
+            # 注意：如果有已播放内容（played_response_text），即使播放时长为0，也应该记录到历史
+            # 因为WebSocket模式下，播放时长可能无法准确获取，但已播放内容是准确的
+            played_text = None
+            if current_context and current_context.is_valid:
+                played_text = current_context.get_extra_data("played_response_text", "")
+                if not played_text:
+                    played_text = current_context.response_text
             
-            if played_duration >= self.min_play_duration_to_record:
+            log_info("MANAGER", f"[HISTORY_CHECK-001] 开始检查播放时长: played_duration={played_duration:.2f}秒, 阈值={self.min_play_duration_to_record:.2f}秒, 已播放文本长度={len(played_text) if played_text else 0}字符", indent=1)
+            
+            # 如果播放时长达到阈值，或者有已播放内容（WebSocket模式下可能无法准确获取播放时长），记录到历史
+            if played_duration >= self.min_play_duration_to_record or (played_text and len(played_text.strip()) > 0):
                 log_info("MANAGER", f"[HISTORY_CHECK-002] 播放时长达到阈值，准备记录对话历史", indent=1)
                 
                 # 播放时长达到阈值，记录已播放内容到对话历史
@@ -813,19 +826,37 @@ class DialogueManager:
                     log_info("MANAGER", f"[HISTORY_CHECK-008] 准备获取 history_lock 并记录到对话历史", indent=1)
                     with self.history_lock:
                         history_before = len(self.conversation_history)
-                        self.conversation_history.append({"role": "user", "content": user_input})
-                        log_info("MANAGER", f"[HISTORY_CHECK-009] 已添加用户消息到历史，历史记录数: {history_before} -> {len(self.conversation_history)}", indent=1)
                         
-                        if played_text:
-                            # 去除前导空白字符（包括换行符、空格等）
-                            played_text_trimmed = played_text.lstrip()
-                            self.conversation_history.append({"role": "assistant", "content": played_text_trimmed})
-                            log_info("MANAGER", f"[HISTORY_CHECK-010] 已添加助手消息到历史，历史记录数: {len(self.conversation_history)}", indent=1)
+                        # 检查是否已经记录过（避免重复记录）
+                        # 检查最后两条消息是否与当前要记录的消息相同
+                        already_recorded = False
+                        if len(self.conversation_history) >= 2:
+                            last_user = self.conversation_history[-2] if len(self.conversation_history) >= 2 else None
+                            last_assistant = self.conversation_history[-1] if len(self.conversation_history) >= 1 else None
+                            
+                            if last_user and last_user.get("role") == "user" and last_user.get("content") == user_input:
+                                if last_assistant and last_assistant.get("role") == "assistant":
+                                    played_text_trimmed = played_text.lstrip() if played_text else ""
+                                    if last_assistant.get("content") == played_text_trimmed:
+                                        already_recorded = True
+                                        log_info("MANAGER", f"[HISTORY_CHECK-008] 检测到重复记录，跳过（用户输入和助手回答都已存在）", indent=1)
+                        
+                        if not already_recorded:
+                            self.conversation_history.append({"role": "user", "content": user_input})
+                            log_info("MANAGER", f"[HISTORY_CHECK-009] 已添加用户消息到历史，历史记录数: {history_before} -> {len(self.conversation_history)}", indent=1)
+                            
+                            if played_text:
+                                # 去除前导空白字符（包括换行符、空格等）
+                                played_text_trimmed = played_text.lstrip()
+                                self.conversation_history.append({"role": "assistant", "content": played_text_trimmed})
+                                log_info("MANAGER", f"[HISTORY_CHECK-010] 已添加助手消息到历史，历史记录数: {len(self.conversation_history)}", indent=1)
+                            else:
+                                log_warn("MANAGER", f"[HISTORY_CHECK-010] 播放文本为空，未添加助手消息", indent=1)
+                            
+                            # 限制历史记录长度
+                            self._limit_history_length()
                         else:
-                            log_warn("MANAGER", f"[HISTORY_CHECK-010] 播放文本为空，未添加助手消息", indent=1)
-                        
-                        # 限制历史记录长度
-                        self._limit_history_length()
+                            log_info("MANAGER", f"[HISTORY_CHECK-009] 跳过重复记录，历史记录数保持不变: {history_before}", indent=1)
                     
                     log_info("MANAGER", f"[HISTORY_CHECK-011] 对话历史记录完成（播放时长: {played_duration:.2f}秒，历史记录总数: {len(self.conversation_history)}）", indent=1)
                     
@@ -1672,22 +1703,35 @@ class DialogueManager:
         # 检测句子切换
         if current_sentence_text != last_sentence_text:
             # 句子切换，将上一个句子标记为完成
-            if last_sentence_text:
+            if last_sentence_text and last_sentence_text not in completed_sentences:
+                # 只有当上一个句子不在已完成列表中时才添加（避免重复）
                 completed_sentences.append(last_sentence_text)
+                context.set_extra_data("completed_sentences", completed_sentences)
             context.set_extra_data("last_sentence_text", current_sentence_text)
         
         # 检测句子完成
+        sentence_completed = False
         if current_sentence_position >= len(current_sentence_text):
             # 当前句子播放完成
             if current_sentence_text and current_sentence_text not in completed_sentences:
+                # 只有当当前句子不在已完成列表中时才添加（避免重复）
                 completed_sentences.append(current_sentence_text)
                 context.set_extra_data("completed_sentences", completed_sentences)
                 context.set_extra_data("last_sentence_text", "")
+                sentence_completed = True
         
         # 计算已播放文本
         # 使用空格连接句子，保留每个句子的完整内容（包括标点符号）
         completed_text = "".join(completed_sentences)
-        current_playing_text = completed_text + current_sentence_text[:current_sentence_position]
+        
+        # 如果当前句子已经完成并添加到completed_sentences，就不需要再添加current_sentence_text的部分
+        # 因为completed_sentences已经包含了完整的句子
+        if sentence_completed or (current_sentence_text in completed_sentences):
+            # 句子已完成，只使用completed_sentences
+            current_playing_text = completed_text
+        else:
+            # 句子未完成，添加当前句子的已播放部分
+            current_playing_text = completed_text + current_sentence_text[:current_sentence_position]
         
         # 更新TaskContext中的已播放文本
         context.set_extra_data("played_response_text", current_playing_text)
@@ -2222,6 +2266,19 @@ class DialogueManager:
                             try:
                                 context.check_valid()
                                 sentence_queue.put(sentence, timeout=1.0)
+                                
+                                # 发布 LLM_SENTENCE_GENERATED 事件（用于 WebSocket 流式输出）
+                                if self.event_bus:
+                                    from voice_chatbot.dialogue.events import EventType, create_event
+                                    sentence_event = create_event(
+                                        EventType.LLM_SENTENCE_GENERATED,
+                                        data={
+                                            "text": sentence,
+                                            "task_id": context.task_id,
+                                        },
+                                        source="DialogueManager"
+                                    )
+                                    self.event_bus.publish(sentence_event)
                                 
                                 # 记录第一句生成时间
                                 if first_sentence:

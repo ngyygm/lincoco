@@ -40,7 +40,7 @@ class Config:
             "encoder_chunk_look_back": 4,  # encoder self-attention lookback chunks数量，用于上下文理解
             "decoder_chunk_look_back": 1,  # decoder cross-attention lookback chunks数量，用于解码时参考历史
             "pre_buffer_seconds": 0.5,  # 预缓存时长（秒），保留VAD检测前的音频避免丢失开头
-            "model_path": "D:\\APP\\models\\Qwen\\paraformer-zh-streaming",  # ASR模型路径
+            "model_path": "/home/linkco/exa/models/paraformer-zh-streaming",  # ASR模型路径
             "language": "zh",  # ASR语言设置（默认中文）
             "audio_queue_maxsize": 100,  # 音频队列最大大小
             "preload_model": True,  # 是否在启动时预加载模型
@@ -72,9 +72,9 @@ class Config:
             "speech_rate_offset": -0.3,  # 文字阅读速度计算偏差值（字符/秒），用于精细化调整
         },
         "llm": {
-            "api_base": "http://127.0.0.1:5000/v1",  # LLM API基础URL（OpenAI兼容格式）
-            "api_key": "sk-1234",  # LLM API密钥
-            "model_name": "qwen3-30b-a3b",  # LLM模型名称
+            "api_base": "https://open.bigmodel.cn/api/paas/v4",  # LLM API基础URL（OpenAI兼容格式）
+            "api_key": "041ee4d3096b1dbb5c05733469c8456f.L2KsmLf3Cvq1JfYi",  # LLM API密钥
+            "model_name": "glm-4-flash-250414",  # LLM模型名称
             "max_tokens": 1024,  # 最大生成token数，控制回复长度
             "temperature": 0.7,  # 生成温度（0.0-2.0），值越大输出越随机，值越小输出越确定
             "min_sentence_length": 8,  # 最小句子长度（字符数或单词数，根据语言类型），用于流式句子合并

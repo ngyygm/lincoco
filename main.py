@@ -325,10 +325,15 @@ def main():
     
     # 初始化日志系统
     log_file_enabled = not args.no_log_file
+    # 先加载配置（用于初始化日志系统）
+    config = Config(config_file=args.config)
+    
+    # 初始化日志系统（传递 config 以读取过滤和颜色配置）
     init_logger(
-        log_level=args.log_level,
+        log_level=args.log_level or config.get("logging.level", "INFO"),
         log_file_enabled=log_file_enabled,
-        log_dir=args.log_dir
+        log_dir=args.log_dir or config.get("logging.log_dir", "logs"),
+        config=config  # 传递 config 以读取 filtered_categories 和 category_colors
     )
     
     log_info("MAIN", "=" * 60, indent=0)
@@ -336,9 +341,6 @@ def main():
     log_info("MAIN", "=" * 60, indent=0)
     
     try:
-        # 加载配置
-        log_info("MAIN", "加载配置...", indent=0)
-        config = Config(config_file=args.config)
         if args.config:
             log_info("MAIN", f"配置文件: {args.config}", indent=1)
         else:
