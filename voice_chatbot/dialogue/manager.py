@@ -659,10 +659,32 @@ class DialogueManager:
         log_info("ASR", f"最终识别结果: {text}", indent=0)
         
         # 记录ASR识别完成时间
-        log_info("TIME", "记录ASR识别完成时间", indent=1)
-        self.performance_timer.record_user_speech_end()
+        try:
+            log_info("TIME", "记录ASR识别完成时间", indent=1)
+            self.performance_timer.record_user_speech_end()
+        except Exception as e:
+            log_error("ASR", f"记录ASR识别完成时间时发生错误: {e}", indent=1)
+            import traceback
+            log_error("ASR", f"异常堆栈: {traceback.format_exc()}", indent=1)
         
-        self._handle_asr_result(text, confidence)
+        # 处理ASR结果（确保用户输入被记录）
+        try:
+            log_debug("ASR", f"准备调用_handle_asr_result处理ASR结果: '{text}'", indent=1)
+            self._handle_asr_result(text, confidence)
+            log_debug("ASR", f"_handle_asr_result调用完成", indent=1)
+        except Exception as e:
+            log_error("ASR", f"处理ASR结果时发生错误: {e}", indent=1)
+            import traceback
+            log_error("ASR", f"异常堆栈: {traceback.format_exc()}", indent=1)
+            
+            # 即使处理失败，也要尝试记录用户输入到对话历史
+            try:
+                log_info("ASR", f"尝试记录用户输入到对话历史: '{text}'", indent=1)
+                with self.history_lock:
+                    self.conversation_history.append({"role": "user", "content": text})
+                log_info("ASR", f"用户输入已记录到对话历史（异常恢复）", indent=1)
+            except Exception as history_error:
+                log_error("ASR", f"记录用户输入到对话历史时发生错误: {history_error}", indent=1)
     
     def _confirm_real_interrupt(self):
         """
@@ -916,6 +938,11 @@ class DialogueManager:
         sub_state = self.state_manager.get_sub_state()
         main_state = self.state_manager.get_main_state()
         log_info("MANAGER", f"处理ASR结果: '{text}' (主系统={main_state.value}, 副系统={sub_state.value})", indent=0)
+        
+        # 添加调试日志：记录当前对话历史数量
+        with self.history_lock:
+            history_count = len(self.conversation_history)
+        log_debug("MANAGER", f"当前对话历史数量: {history_count}条", indent=1)
         
         # 检查是否已经处理过（避免重复处理）
         if main_state == MainSystemState.IDLE and sub_state == SubSystemState.PROCESSING:
@@ -2017,6 +2044,7 @@ class DialogueManager:
             context: 任务上下文（在取消前获取）
         """
         if not context or not context.is_valid:
+            log_warn("MANAGER", f"任务取消，但上下文无效或不存在，跳过记录", indent=1)
             return
         
         user_input = context.user_input
@@ -2027,62 +2055,81 @@ class DialogueManager:
         played_text = None
         played_duration = 0.0
         
-        if sub_state == SubSystemState.SPEAKING:
-            # 正在播放时被打断，检查播放时长
-            if self.audio_player:
-                progress = self.audio_player.get_progress()
-                played_duration = progress.get("elapsed_time", 0.0)
-                
-                if played_duration >= self.min_play_duration_to_record:
-                    # 播放时长达到阈值，获取已播放文本：completed_sentences + played_response_text
-                    completed_sentences = context.get_extra_data("completed_sentences", [])
-                    played_response_text = context.get_extra_data("played_response_text", "")
+        try:
+            if sub_state == SubSystemState.SPEAKING:
+                # 正在播放时被打断，检查播放时长
+                if self.audio_player:
+                    progress = self.audio_player.get_progress()
+                    played_duration = progress.get("elapsed_time", 0.0)
                     
-                    # 计算完整的已播放文本
-                    completed_text = "".join(completed_sentences)
-                    played_text = completed_text + played_response_text
-                    
-                    log_info("MANAGER", f"播放时长达到阈值（{played_duration:.2f}秒），计算已播放文本: 已完成句子数={len(completed_sentences)}, 已完成文本长度={len(completed_text)}字符, 当前播放文本长度={len(played_response_text)}字符", indent=1)
-                    
-                    # 如果计算出的文本为空，尝试使用manager中实时跟踪的文本
-                    if not played_text:
-                        with self.current_played_text_lock:
-                            if self.current_played_text_task_id == context.task_id and self.current_played_text:
-                                played_text = self.current_played_text
-                                log_info("MANAGER", f"使用manager中实时跟踪的播放文本: 长度={len(played_text)}字符", indent=1)
-                    
-                    # 如果还是没有，使用完整回答文本作为fallback
-                    if not played_text:
-                        played_text = context.response_text
-                        log_info("MANAGER", f"已播放文本为空，使用完整回答文本: 长度={len(played_text) if played_text else 0}字符", indent=1)
-                    
-                    log_info("MANAGER", f"将记录assistant回复: 长度={len(played_text) if played_text else 0}字符", indent=1)
-                else:
-                    log_info("MANAGER", f"播放时长未达到阈值（{played_duration:.2f}秒 < {self.min_play_duration_to_record:.2f}秒），不记录assistant回复", indent=1)
-        else:
-            # PROCESSING状态，还未开始播放，不记录assistant回复
-            log_info("MANAGER", "任务还在PROCESSING状态（未开始播放），不记录assistant回复", indent=1)
-        
-        # 记录到对话历史（用户输入总是记录）
-        with self.history_lock:
-            self.conversation_history.append({"role": "user", "content": user_input})
+                    if played_duration >= self.min_play_duration_to_record:
+                        # 播放时长达到阈值，获取已播放文本：completed_sentences + played_response_text
+                        completed_sentences = context.get_extra_data("completed_sentences", [])
+                        played_response_text = context.get_extra_data("played_response_text", "")
+                        
+                        # 计算完整的已播放文本
+                        completed_text = "".join(completed_sentences)
+                        played_text = completed_text + played_response_text
+                        
+                        log_info("MANAGER", f"播放时长达到阈值（{played_duration:.2f}秒），计算已播放文本: 已完成句子数={len(completed_sentences)}, 已完成文本长度={len(completed_text)}字符, 当前播放文本长度={len(played_response_text)}字符", indent=1)
+                        
+                        # 如果计算出的文本为空，尝试使用manager中实时跟踪的文本
+                        if not played_text:
+                            with self.current_played_text_lock:
+                                if self.current_played_text_task_id == context.task_id and self.current_played_text:
+                                    played_text = self.current_played_text
+                                    log_info("MANAGER", f"使用manager中实时跟踪的播放文本: 长度={len(played_text)}字符", indent=1)
+                        
+                        # 如果还是没有，使用完整回答文本作为fallback
+                        if not played_text:
+                            played_text = context.response_text
+                            log_info("MANAGER", f"已播放文本为空，使用完整回答文本: 长度={len(played_text) if played_text else 0}字符", indent=1)
+                        
+                        log_info("MANAGER", f"将记录assistant回复: 长度={len(played_text) if played_text else 0}字符", indent=1)
+                    else:
+                        log_info("MANAGER", f"播放时长未达到阈值（{played_duration:.2f}秒 < {self.min_play_duration_to_record:.2f}秒），不记录assistant回复", indent=1)
+            else:
+                # PROCESSING状态，还未开始播放，不记录assistant回复
+                log_info("MANAGER", "任务还在PROCESSING状态（未开始播放），不记录assistant回复", indent=1)
+            
+            # 记录到对话历史（用户输入总是记录，无论是否开始播放）
+            with self.history_lock:
+                self.conversation_history.append({"role": "user", "content": user_input})
+                if played_text:
+                    # 去除前导空白字符（包括换行符、空格等）
+                    played_text_trimmed = played_text.lstrip()
+                    self.conversation_history.append({"role": "assistant", "content": played_text_trimmed})
+                # 限制历史记录长度
+                self._limit_history_length()
+            
             if played_text:
-                # 去除前导空白字符（包括换行符、空格等）
-                played_text_trimmed = played_text.lstrip()
-                self.conversation_history.append({"role": "assistant", "content": played_text_trimmed})
-            # 限制历史记录长度
-            self._limit_history_length()
-        
-        if played_text:
-            log_info("MANAGER", f"任务取消时已记录对话历史（用户输入 + assistant回复，播放时长: {played_duration:.2f}秒）", indent=1)
-            # 重置播放文本跟踪（避免重复记录）
-            with self.current_played_text_lock:
-                if self.current_played_text_task_id == context.task_id:
-                    log_info("MANAGER", f"重置播放文本跟踪（任务ID={context.task_id}）", indent=1)
-                    self.current_played_text = ""
-                    self.current_played_text_task_id = 0
-        else:
-            log_info("MANAGER", f"任务取消时已记录对话历史（仅用户输入，无assistant回复）", indent=1)
+                log_info("MANAGER", f"任务取消时已记录对话历史（用户输入 + assistant回复，播放时长: {played_duration:.2f}秒）", indent=1)
+                # 重置播放文本跟踪（避免重复记录）
+                with self.current_played_text_lock:
+                    if self.current_played_text_task_id == context.task_id:
+                        log_info("MANAGER", f"重置播放文本跟踪（任务ID={context.task_id}）", indent=1)
+                        self.current_played_text = ""
+                        self.current_played_text_task_id = 0
+            else:
+                log_info("MANAGER", f"任务取消时已记录对话历史（仅用户输入，无assistant回复）", indent=1)
+                # 打印当前对话历史数量，用于调试
+                log_debug("MANAGER", f"当前对话历史数量: {len(self.conversation_history)}条", indent=1)
+                if len(self.conversation_history) > 0:
+                    last_entry = self.conversation_history[-1]
+                    log_debug("MANAGER", f"最新历史记录: role={last_entry.get('role')}, content='{last_entry.get('content')}'", indent=1)
+                    
+        except Exception as e:
+            log_error("MANAGER", f"记录用户输入到对话历史时发生错误: {e}", indent=1)
+            import traceback
+            log_error("MANAGER", f"异常堆栈: {traceback.format_exc()}", indent=1)
+            
+            # 即使出错，也要确保至少记录用户输入
+            try:
+                with self.history_lock:
+                    self.conversation_history.append({"role": "user", "content": user_input})
+                log_info("MANAGER", f"异常恢复：用户输入已强制记录到对话历史", indent=1)
+            except Exception as e2:
+                log_error("MANAGER", f"强制记录用户输入失败: {e2}", indent=1)
     
     def _cancel_current_task(self):
         """
