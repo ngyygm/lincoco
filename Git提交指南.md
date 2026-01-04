@@ -580,6 +580,164 @@ git commit -m "配置LFS"
 git push origin master
 ```
 
+### 问题5：推送时DNS解析失败（无法连接GitHub）
+
+#### 问题现象
+```
+fatal: unable to access 'https://github.com/xxx/xxx.git/':
+Failed to connect to github.com port 443 after 21119 ms: Couldn't connect to server
+```
+
+#### 原因分析
+这是中国大陆访问GitHub的常见问题，由于DNS解析服务被污染或DNS服务器响应异常，导致无法正确解析GitHub域名。虽然ping可能通（因为有缓存），但Git的DNS查询失败。
+
+#### 解决方案1：修改hosts文件（推荐，最直接）
+
+**步骤1：查询GitHub的IP地址**
+```bash
+# 使用Google DNS查询
+nslookup github.com 8.8.8.8
+
+# 输出示例：
+# Name:    github.com
+# Address: 20.205.243.166
+```
+
+**步骤2：使用管理员权限添加hosts记录**
+```powershell
+# 以管理员身份运行PowerShell
+echo 20.205.243.166 github.com >> C:\Windows\System32\drivers\etc\hosts
+
+# 或使用编辑器手动添加
+# 用记事本以管理员身份打开：
+# C:\Windows\System32\drivers\etc\hosts
+# 添加一行：20.205.243.166 github.com
+```
+
+**步骤3：验证并推送**
+```bash
+# 清除DNS缓存
+ipconfig /flushdns
+
+# 验证DNS解析
+nslookup github.com
+
+# 推送代码
+git push origin master
+```
+
+#### 解决方案2：使用SSH协议（长期使用更稳定）
+
+**优点**：不依赖DNS解析，连接更稳定
+
+**步骤1：生成SSH密钥**
+```bash
+# 生成SSH密钥对
+ssh-keygen -t rsa -C "your_email@example.com"
+
+# 一路回车，使用默认设置
+# 生成的文件位置：~/.ssh/id_rsa（私钥）和 id_rsa.pub（公钥）
+```
+
+**步骤2：添加公钥到GitHub**
+```bash
+# 查看公钥内容
+cat ~/.ssh/id_rsa.pub
+
+# 复制整个内容（从 ssh-rsa 开始）
+```
+
+然后在GitHub添加：
+1. 登录GitHub -> Settings
+2. SSH and GPG keys -> New SSH key
+3. 粘贴公钥内容 -> Add SSH key
+
+**步骤3：切换远程仓库为SSH地址**
+```bash
+# 查看当前远程仓库地址
+git remote -v
+
+# 切换为SSH地址
+git remote set-url origin git@github.com:ngyygm/lincoco.git
+
+# 验证SSH连接
+ssh -T git@github.com
+
+# 推送代码
+git push origin master
+```
+
+**步骤4：Windows上配置SSH（如果遇到问题）**
+```powershell
+# 启动SSH Agent服务
+Get-Service -Name ssh-agent | Set-Service -StartupType Automatic
+Start-Service ssh-agent
+
+# 添加私钥
+ssh-add ~/.ssh/id_rsa
+```
+
+#### 解决方案3：配置公共DNS服务器
+
+**步骤1：使用PowerShell配置DNS**
+```powershell
+# 查看当前网络适配器名称
+Get-NetAdapter
+
+# 配置Google DNS和阿里DNS
+Set-DnsClientServerAddress -InterfaceAlias "以太网" -ServerAddresses "8.8.8.8","8.8.4.4"
+
+# 或使用国内DNS
+Set-DnsClientServerAddress -InterfaceAlias "以太网" -ServerAddresses "114.114.114.114","223.5.5.5"
+```
+
+**步骤2：清除DNS缓存**
+```bash
+ipconfig /flushdns
+```
+
+**步骤3：重启网络或重新连接**
+
+#### 解决方案4：使用Git代理（如果有VPN）
+
+```bash
+# 设置HTTP代理
+git config --global http.proxy http://127.0.0.1:7890
+git config --global https.proxy https://127.0.0.1:7890
+
+# 取消代理
+git config --global --unset http.proxy
+git config --global --unset https.proxy
+
+# 查看代理配置
+git config --global --get http.proxy
+```
+
+#### 验证DNS是否修复
+
+```bash
+# 方法1：nslookup测试
+nslookup github.com
+
+# 方法2：ping测试
+ping github.com
+
+# 方法3：Git连接测试
+git ls-remote https://github.com/ngyygm/lincoco.git
+```
+
+#### 推荐方案优先级
+1. **修改hosts文件**：简单快速，适合临时使用
+2. **SSH协议**：长期稳定，推荐作为永久解决方案
+3. **公共DNS**：系统级配置，影响所有网络请求
+4. **代理方式**：需要VPN支持，适合有代理的用户
+
+#### 注意事项
+- hosts文件修改需要**管理员权限**
+- GitHub的IP地址可能会变化，需要定期更新
+- 如果多个解决方案都尝试后仍无法连接，可能是网络防火墙限制
+- 在公司或学校网络中，可能需要联系网络管理员
+
 ---
 
 ## 八、快速参考卡片

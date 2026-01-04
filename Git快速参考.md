@@ -116,6 +116,51 @@ git add 冲突文件
 git commit
 ```
 
+### 场景7：推送时DNS解析失败（无法连接GitHub）
+**问题现象**：
+```
+fatal: unable to access 'https://github.com/xxx/xxx.git/':
+Failed to connect to github.com port 443
+```
+
+**原因分析**：DNS解析问题，常见于中国大陆访问GitHub
+
+**解决方案1：修改hosts文件（推荐，最直接）**
+```bash
+# 1. 查询GitHub的IP地址
+nslookup github.com 8.8.8.8
+
+# 2. 使用管理员权限打开PowerShell，添加hosts记录
+echo <GitHub的IP> github.com >> C:\Windows\System32\drivers\etc\hosts
+
+# 示例：
+echo 20.205.243.166 github.com >> C:\Windows\System32\drivers\etc\hosts
+
+# 3. 再次推送
+git push origin master
+```
+
+**解决方案2：使用SSH协议（长期使用更稳定）**
+```bash
+# 1. 切换远程仓库为SSH地址
+git remote set-url origin git@github.com:ngyygm/lincoco.git
+
+# 2. 配置SSH密钥（首次使用需要）
+ssh-keygen -t rsa -C "your_email@example.com"
+
+# 3. 复制公钥到GitHub（~/.ssh/id_rsa.pub内容）
+# Settings -> SSH and GPG keys -> New SSH key
+
+# 4. 推送
+git push origin master
+```
+
+**解决方案3：配置公共DNS服务器**
+```powershell
+# 使用Google DNS或阿里DNS
+Set-DnsClientServerAddress -InterfaceAlias "以太网" -ServerAddresses "8.8.8.8","114.114.114.114"
+```
+
 ---
 
 ## 📋 分支操作
