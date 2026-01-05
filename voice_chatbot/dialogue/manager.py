@@ -651,9 +651,47 @@ class DialogueManager:
             )
     
     def _on_asr_partial_result(self, text, confidence=None):
-        """ASR部分结果回调"""
-        # 可选：可以在这里处理部分结果（如实时显示）
+        """
+        ASR部分结果回调
+
+        实时检测打断：一旦识别到有效文本，立即确认真实打断
+        优化目标：不等用户说完话，只要识别出有效内容就立即打断
+        """
         log_debug("MANAGER", f"部分识别结果: {text}", indent=0)
+
+        # 检查文本是否有效
+        is_valid_input = self._validate_input(text)
+
+        
+            
+        if is_valid_input:
+
+            # 实时打断检测：检查是否有待确认的打断
+            with self.interrupt_lock:
+                if not self.pending_interrupt:
+                    # 已经清除了，不处理
+                    return
+                # 识别到有效文本，立即确认真实打断
+                log_info("MANAGER", f"✅ 实时打断检测：识别到有效文本 '{text}'，立即确认真实打断", indent=0)
+
+                # 立即清除pending_interrupt标志，防止后续部分结果重复处理
+                # 在锁内清除后立即返回，不会有时间差导致重复
+                self.pending_interrupt = False
+
+            # 在锁外调用_confirm_real_interrupt
+            try:
+                self._confirm_real_interrupt()
+            except Exception as e:
+                log_error("MANAGER", f"实时确认打断时发生错误: {e}", indent=0)
+                import traceback
+                log_error("MANAGER", f"异常堆栈: {traceback.format_exc()}", indent=0)
+                
+        else:
+            # 仍然是无效文本，继续等待
+            log_debug("MANAGER", f"部分结果无效（'{text}'），继续等待...", indent=1)
+            return
+
+            
     
     def _on_asr_final_result(self, text, confidence=None):
         """ASR最终结果回调"""
@@ -690,17 +728,19 @@ class DialogueManager:
     def _confirm_real_interrupt(self):
         """
         确认真实打断并停止播放
-        
+
         当ASR验证成功（有效输入）时调用，正式打断当前播放或处理
-        
+
         根据THREAD_SCHEDULING.md场景2，应该：
         1. 停止播放
         2. 检查播放时长
         3. 如果播放时长 >= MIN_PLAY_DURATION_TO_RECORD，记录已播放内容到对话历史
         4. 清理播放状态
         5. 清除 pending_interrupt
-        
-        注意：如果遇到打断，响应耗时分析的初始时间点要重新计算，从当前句子VAD结束时间开始
+
+        注意：
+        - 如果遇到打断，响应耗时分析的初始时间点要重新计算，从当前句子VAD结束时间开始
+        - 调用此方法前，pending_interrupt应该已经被清除，防止重复调用
         """
         log_info("MANAGER", "确认真实打断，停止播放并处理新输入", indent=0)
         
@@ -939,7 +979,12 @@ class DialogueManager:
         sub_state = self.state_manager.get_sub_state()
         main_state = self.state_manager.get_main_state()
         log_info("MANAGER", f"处理ASR结果: '{text}' (主系统={main_state.value}, 副系统={sub_state.value})", indent=0)
-        
+
+        # 检查是否已经通过部分结果实时确认了打断（pending_interrupt已被清除）
+        with self.interrupt_lock:
+            if not self.pending_interrupt:
+                log_info("MANAGER", "打断已通过部分结果实时确认，跳过重复处理打断逻辑", indent=1)
+
         # 添加调试日志：记录当前对话历史数量
         with self.history_lock:
             history_count = len(self.conversation_history)
@@ -1440,7 +1485,7 @@ class DialogueManager:
                 log_info("MANAGER", "[LOCK-009] _on_vad_speech_start() 场景1变体-检测到可能打断 正在获取 interrupt_lock", indent=0)
                 with self.interrupt_lock:
                     self.pending_interrupt = True
-                
+
                 # 启动延迟验证（通过定时器）
                 self._pause_for_voice_check()
             else:
