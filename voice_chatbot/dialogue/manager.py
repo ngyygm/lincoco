@@ -217,6 +217,7 @@ class DialogueManager:
         # ASR线程管理
         self.asr_thread_lock = threading.Lock()
         self.asr_task_id = 0  # ASR任务ID（独立于主任务ID）
+        self.current_asr_thread_name = None  # 当前活动的ASR线程名
         
         # TTS播放文本实时跟踪（用于记录对话历史）
         self.current_played_text_lock = threading.Lock()  # 保护当前播放文本的锁
@@ -1379,7 +1380,8 @@ class DialogueManager:
         """VAD检测到语音开始回调（由线程2调用）"""
         # 首先检查ASR线程是否在运行（无论当前状态如何，避免重复启动）
         with self.asr_thread_lock:
-            asr_thread_info = self.thread_manager.get_thread_info("ASR-Recognition")
+            asr_thread_name = self.current_asr_thread_name
+            asr_thread_info = self.thread_manager.get_thread_info(asr_thread_name) if asr_thread_name else None
             asr_thread_alive = asr_thread_info and asr_thread_info.is_alive and asr_thread_info.thread.is_alive()
             asr_recognizing = False
             if self.asr and hasattr(self.asr, 'state_lock') and hasattr(self.asr, 'recognizing'):
@@ -1654,7 +1656,8 @@ class DialogueManager:
         
         with self.asr_thread_lock:
             # 检查ASR线程是否已在运行
-            asr_thread_info = self.thread_manager.get_thread_info("ASR-Recognition")
+            asr_thread_name = self.current_asr_thread_name
+            asr_thread_info = self.thread_manager.get_thread_info(asr_thread_name) if asr_thread_name else None
             if asr_thread_info:
                 # 检查线程是否真的还在运行（不等待，直接检查）
                 thread_actually_alive = asr_thread_info.thread.is_alive() if asr_thread_info.thread else False
@@ -1762,21 +1765,25 @@ class DialogueManager:
                 finally:
                     log_info("MANAGER", f"ASR识别线程结束（任务ID: {current_asr_task_id}）", indent=0)
             
-            # 启动ASR识别线程
+            # 启动ASR识别线程（线程名包含任务ID，允许并发）
             try:
+                asr_thread_name = f"ASR-Recognition-{current_asr_task_id}"
                 self.thread_manager.start_thread(
-                    name="ASR-Recognition",
+                    name=asr_thread_name,
                     target=asr_recognition_thread,
                     context=None,
                     thread_type="on_demand",
                     daemon=True
                 )
+                # 保存当前线程名
+                self.current_asr_thread_name = asr_thread_name
                 log_info("MANAGER", f"启动ASR识别线程（任务ID: {current_asr_task_id}）", indent=0)
             except ValueError as e:
                 # ThreadManager检测到线程冲突
                 log_error("MANAGER", f"启动ASR识别线程失败: {e}", indent=0)
                 # 再次检查线程状态
-                asr_thread_info = self.thread_manager.get_thread_info("ASR-Recognition")
+                asr_thread_name = self.current_asr_thread_name
+                asr_thread_info = self.thread_manager.get_thread_info(asr_thread_name) if asr_thread_name else None
                 if asr_thread_info:
                     thread_actually_alive = asr_thread_info.thread.is_alive() if asr_thread_info.thread else False
                     asr_recognizing = False
@@ -1790,7 +1797,8 @@ class DialogueManager:
             time.sleep(0.05)  # 50ms，给线程启动时间
             
             # 检查线程是否还在运行（如果立即失败，线程可能已经结束）
-            asr_thread_info = self.thread_manager.get_thread_info("ASR-Recognition")
+            asr_thread_name = self.current_asr_thread_name
+            asr_thread_info = self.thread_manager.get_thread_info(asr_thread_name) if asr_thread_name else None
             if not asr_thread_info or not asr_thread_info.is_alive or not asr_thread_info.thread.is_alive():
                 log_error("MANAGER", "ASR线程启动后立即失败", indent=0)
                 return

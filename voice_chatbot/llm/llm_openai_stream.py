@@ -121,6 +121,8 @@ def get_complete_sentences(buffer: str, is_first_sentence: bool = False, comma_d
                 # 删除首句切分后句子末尾的逗号
                 sentences = [remove_trailing_comma(s) for s in sentences]
                 sentences = [s for s in sentences if s.strip()]  # 再次过滤空字符串
+                # 首句以逗号分割的句子，在末尾添加"。"（除非已经有句号或其他结束符）
+                sentences = [s if s[-1] in ['。', '？', '！', '.', '?', '!', '~'] else s + '。' for s in sentences]
                 return sentences, remaining
         else:
             # 逗号后的内容还不够延迟字符数，等待更多内容

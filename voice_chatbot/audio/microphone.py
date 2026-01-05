@@ -1,14 +1,13 @@
 """
 麦克风采集模块
 
-提供音频采集、实时流处理、回调机制、多设备支持、格式转换和回声消除功能
+提供音频采集、实时流处理、回调机制、多设备支持、格式转换功能
 参考：56_Lincoco_streamASR_openai_edgetts_realTime.py
 """
 
 import threading
 import time
 from typing import Optional, Callable, List, Dict, Any
-from collections import deque
 
 import pyaudio
 import numpy as np
@@ -35,11 +34,6 @@ class MicrophoneRecorder:
         self.chunk_size = config.get("audio.chunk_size", 1024)
         self.channels = config.get("audio.channels", 1)
         
-        # 从配置获取回声消除参数
-        self.enable_echo_cancellation = config.get("audio_filter.enable_echo_cancellation", True)
-        self.echo_cancellation_strength = config.get("audio_filter.echo_cancellation_strength", 0.8)
-        self.playback_reference_delay = config.get("audio_filter.playback_reference_delay", 0)
-        
         # PyAudio实例和流
         self.pyaudio_instance: Optional[pyaudio.PyAudio] = None
         self.stream: Optional[pyaudio.Stream] = None
@@ -49,10 +43,6 @@ class MicrophoneRecorder:
         self.recording = False
         self.recording_thread: Optional[threading.Thread] = None
         self.recording_lock = threading.Lock()
-        
-        # 回声消除相关
-        self.playback_reference_buffer: deque = deque(maxlen=int(self.sample_rate * 2))  # 最多保存2秒的参考信号
-        self.playback_reference_lock = threading.Lock()
         
         log_info("MIC", "麦克风采集器初始化完成", indent=0)
     
@@ -157,75 +147,6 @@ class MicrophoneRecorder:
         
         return self.get_device_info(self.device_index)
     
-    def set_playback_reference(self, audio_data: np.ndarray):
-        """
-        设置播放参考信号（用于回声消除）
-        
-        Args:
-            audio_data: 播放的音频数据（float32格式，1D数组）
-        """
-        if not self.enable_echo_cancellation:
-            return
-        
-        with self.playback_reference_lock:
-            # 将音频数据添加到缓冲区（带延迟补偿）
-            # 延迟补偿：根据配置的延迟参数，可能需要调整数据的位置
-            if len(audio_data) > 0:
-                # 如果配置了延迟，可以在这里处理
-                # 简单实现：直接添加到缓冲区
-                self.playback_reference_buffer.extend(audio_data)
-                log_debug("MIC", f"更新播放参考信号，缓冲区长度: {len(self.playback_reference_buffer)}", indent=2)
-    
-    def _apply_echo_cancellation(self, mic_data: np.ndarray) -> np.ndarray:
-        """
-        应用回声消除算法
-        
-        Args:
-            mic_data: 麦克风输入的音频数据（float32格式）
-            
-        Returns:
-            处理后的音频数据（float32格式）
-        """
-        if not self.enable_echo_cancellation:
-            return mic_data
-        
-        with self.playback_reference_lock:
-            if len(self.playback_reference_buffer) == 0:
-                # 没有参考信号，直接返回原始数据
-                return mic_data
-            
-            # 获取参考信号（取与mic_data相同长度的数据）
-            reference_length = len(mic_data)
-            if len(self.playback_reference_buffer) < reference_length:
-                # 参考信号不足，直接返回原始数据
-                return mic_data
-            
-            # 从缓冲区末尾取数据（最新的参考信号）
-            reference_data = np.array(list(self.playback_reference_buffer)[-reference_length:])
-            
-            # 简单的相关性检测和抑制算法
-            # 计算相关性（使用归一化互相关）
-            mic_normalized = mic_data / (np.linalg.norm(mic_data) + 1e-10)
-            ref_normalized = reference_data / (np.linalg.norm(reference_data) + 1e-10)
-            correlation = np.dot(mic_normalized, ref_normalized)
-            
-            # 如果相关性高，说明可能是回声
-            if correlation > 0.3:  # 相关性阈值
-                # 计算抑制系数
-                suppression_factor = self.echo_cancellation_strength * correlation
-                
-                # 抑制回声：从麦克风输入中减去参考信号的一部分
-                filtered_data = mic_data - reference_data * suppression_factor
-                
-                # 限制幅度，避免过度抑制
-                filtered_data = np.clip(filtered_data, -1.0, 1.0)
-                
-                log_debug("MIC", f"回声消除: 相关性={correlation:.3f}, 抑制系数={suppression_factor:.3f}", indent=2)
-                return filtered_data
-            else:
-                # 相关性低，不是回声，返回原始数据
-                return mic_data
-    
     def _convert_to_float32(self, audio_data: bytes) -> np.ndarray:
         """
         将int16格式的音频数据转换为float32格式
@@ -272,9 +193,6 @@ class MicrophoneRecorder:
                     
                     # 转换为float32格式
                     audio_float32 = self._convert_to_float32(audio_data)
-                    
-                    # 应用回声消除
-                    audio_float32 = self._apply_echo_cancellation(audio_float32)
                     
                     # 调用回调函数
                     if self.on_audio_data_callback:

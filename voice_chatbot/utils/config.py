@@ -23,17 +23,12 @@ class Config:
         },
         "vad": {  # VAD语音活动检测配置（独立section）
             "mode": 3,  # VAD模式（0-3），数字越大越敏感，3=最敏感。降低此值会减少误判但可能漏检
-            "activation_rate": 0.25,  # VAD激活率（0.0-1.0），检测窗口内语音块占比超过此值才判定为有语音。值越小越敏感，容易检测到声音但可能误判环境音；值越大越严格。建议0.2-0.4，声音小或感觉过滤太多可降低（如0.2-0.3）
+            "activation_rate": 0.1,  # VAD激活率（0.0-1.0），检测窗口内语音块占比超过此值才判定为有语音。值越小越敏感，容易检测到声音但可能误判环境音；值越大越严格。建议0.2-0.4，声音小或感觉过滤太多可降低（如0.2-0.3）
             "adaptive_threshold": False,  # 是否启用自适应阈值（根据环境自动调整激活率），适合环境噪声变化大的场景
             "min_activation_rate": 0.15,  # 最小激活率（0.0-1.0），自适应阈值时的下限
             "max_activation_rate": 0.5,  # 最大激活率（0.0-1.0），自适应阈值时的上限
-            "check_interval": 0.2,  # VAD检测间隔（秒），检测窗口大小，值越小响应越快但CPU占用更高
+            "check_interval": 0.1,  # VAD检测间隔（秒），检测窗口大小，值越小响应越快但CPU占用更高
             "thread_sleep": 0.01,  # VAD线程休眠间隔（秒）
-        },
-        "audio_filter": {
-            "enable_echo_cancellation": True,  # 是否启用回声消除（AEC），用于去除播放音频对麦克风的影响
-            "echo_cancellation_strength": 0.2,  # 回声消除强度（0.0-1.0），值越大消除效果越强
-            "playback_reference_delay": 0,  # 播放参考信号延迟（采样点数），用于补偿音频延迟
         },
         "asr": {
             "chunk_size": [0, 10, 5],  # ASR chunk大小配置，[0, 10, 5] = 600ms，[0, 8, 4] = 480ms
@@ -45,18 +40,18 @@ class Config:
             "audio_queue_maxsize": 100,  # 音频队列最大大小
             "preload_model": True,  # 是否在启动时预加载模型
             "result_timeout": 30.0,  # ASR结果等待超时（秒），统一的ASR超时参数
-            "result_time_buffer": 0.5,  # 结果时间缓冲（秒），考虑ASR识别延迟，用于时间段提取时扩展时间范围（增大到0.5秒确保ASR有足够时间输出最后一个字）
+            "result_time_buffer": 0.1,  # 结果时间缓冲（秒），考虑ASR识别延迟，用于时间段提取时扩展时间范围（增大到0.5秒确保ASR有足够时间输出最后一个字）
             "max_result_age": 60.0,  # 结果最大保留时间（秒），超过此时间的自动清理，防止内存泄漏
             "enable_deduplication": False,  # 是否启用ASR流式去重，处理流式识别中的重复文本
         },
         "dialogue": {
             "no_speech_threshold": 0.8,  # 无语音阈值（秒），用户停止说话后等待多久才认为说话结束并触发ASR停止，值越大越不容易误判（如换气时），但响应会变慢。建议0.8-1.2秒，语速慢可设更大。从0.4秒改为1.0秒以避免过早停止ASR
-            "min_audio_length": 0.3,  # 最小语音时长窗口（秒），用于判断是否为真实语音活动
-            "audio_stop_delay": 0.5,  # 延迟验证时间（秒）
-            "min_play_duration_to_record": 1.3,  # 最小播放时长阈值（秒），播放时长小于此值时不记录到对话历史（实际判断时需要达到此值，已包含audio_stop_delay=0.5秒）
+            "min_audio_length": 0.2,  # 最小语音时长窗口（秒），用于判断是否为真实语音活动
+            "audio_stop_delay": 0.3,  # 延迟验证时间（秒）
             "invalid_recognition_words": ["", "i", "嗯", "啊", "呃", "哦", "额"],  # 无效识别词列表
-            "interrupt_check_interval": 0.1,  # 打断检测间隔（秒）
-            "min_silent_duration": 0.8,  # 最小静音时长（秒），延迟验证期间的静音检测阈值，建议与no_speech_threshold配合
+            "interrupt_check_interval": 0.01,  # 打断检测间隔（秒）
+            "min_silent_duration": 0.3,  # 最小静音时长（秒），延迟验证期间的静音检测阈值，建议与no_speech_threshold配合
+            "min_play_duration_to_record": 1.3,  # 最小播放时长阈值（秒），播放时长小于此值时不记录到对话历史（实际判断时需要达到此值，已包含audio_stop_delay=0.5秒）
             "sentence_queue_maxsize": 100,  # 句子队列最大大小
             "audio_play_queue_maxsize": 50,  # 音频播放队列最大大小
             "auto_save_state": False,  # 是否自动保存对话状态
@@ -81,7 +76,7 @@ class Config:
             "min_sentence_length": 8,  # 最小句子长度（字符数或单词数，根据语言类型），用于流式句子合并
             "sentence_length_increment_rate": 2,  # 句子长度增量倍率，用于动态调整后续句子的最小长度
             "max_sentence_length": 200,  # 最大句子长度（字符数或单词数，根据语言类型），防止句子无限增长
-            "first_sentence_comma_delay_chars": 8,  # 首句逗号延迟字符数，遇到逗号后等待此数量的字符，如果期间出现句号等结束符则按结束符切分，否则按逗号切分
+            "first_sentence_comma_delay_chars": 5,  # 首句逗号延迟字符数，遇到逗号后等待此数量的字符，如果期间出现句号等结束符则按结束符切分，否则按逗号切分
             "system_prompt": "你叫林可可，是16岁的女高中生，性格活泼开朗，谈吐风趣。你正在和用户聊天，回答简短，控制在300字以内，不要用表情。",  # 系统提示词，定义AI助手的角色和对话风格（保留作为向后兼容的fallback）
             "persona_name": "lincoco",  # 默认人设名称（对应llm/personas/目录下的文件名，不含扩展名）
             "persona_dir": "llm/personas",  # 人设文件目录（相对于项目根目录）
@@ -181,16 +176,16 @@ class Config:
             "default_format": "wav",  # 默认音频格式（wav, mp3, pcm）
         },
         "logging": {  # 统一日志配置（Logger 和 EventLogger）
-            "level": "INFO",  # 日志级别（DEBUG, INFO, WARN, ERROR），只输出此级别及以上的日志
-            "file_enabled": True,  # 是否启用文件日志，日志会保存到文件中
+            "file_enabled": False,  # 是否启用文件日志，日志会保存到文件中
             "log_dir": "logs",  # 日志文件目录路径（相对于项目根目录）
             "enable_console": True,  # 是否输出到控制台（EventLogger用）
             "show_delta": True,  # 是否显示与上一事件的时间差（EventLogger用）
             "enable_sequence_diagram": True,  # 是否启用sequenceDiagram记录（图形化流程记录，EventLogger用）
             "sequence_diagram_flow_timeout": 30.0,  # 流程超时时间（秒），超过此时间自动结束流程记录（EventLogger用）
             # 日志过滤配置
-            "filtered_levels": [],  # 允许输出的日志级别列表（白名单，如 ["DEBUG"]），只有在此列表中的级别才会输出，为空则不过滤级别
-            "filtered_categories": ["THREAD", "EVENT", "MIC", "TIME", "CTX", "VAD"],  # 被过滤的日志类别列表（黑名单，如 ["THREAD", "EVENT", "MANAGER", "VAD", "CTX", "MIC"]），这些类别的日志将不输出
+            "filtered_levels": ["INFO"],  # 允许输出的日志级别列表（白名单，如 ["DEBUG"]），只有在此列表中的级别才会输出，为空则不过滤级别
+            # 被过滤的日志类别列表（黑名单，如 ["THREAD", "EVENT", "MANAGER", "VAD", "CTX", "MIC"]），这些类别的日志将不输出
+            "filtered_categories": ["THREAD", "EVENT", "MIC", "TIME", "CTX", "MANAGER", "VAD"], 
             # 日志类别专属颜色配置（字典格式：{"CATEGORY": "COLOR_NAME"}，如 {"ASR": "GREEN", "LLM": "CYAN"}）
             # 支持的颜色名称：BLACK, RED, GREEN, YELLOW, BLUE, MAGENTA, CYAN, WHITE,
             # BRIGHT_BLACK, BRIGHT_RED, BRIGHT_GREEN, BRIGHT_YELLOW, BRIGHT_BLUE, BRIGHT_MAGENTA, BRIGHT_CYAN, BRIGHT_WHITE
@@ -322,10 +317,6 @@ class Config:
         assert self.config["vad"]["check_interval"] > 0, "vad.check_interval必须大于0"
         assert self.config["vad"]["thread_sleep"] > 0, "vad.thread_sleep必须大于0"
         
-        # 验证音频过滤参数
-        assert 0.0 <= self.config["audio_filter"]["echo_cancellation_strength"] <= 1.0, \
-            "echo_cancellation_strength必须在0.0-1.0之间"
-        
         # 验证ASR参数
         assert self.config["asr"]["result_timeout"] > 0, "asr.result_timeout必须大于0"
         
@@ -370,8 +361,6 @@ class Config:
         
         # 验证日志配置参数
         valid_levels = ["DEBUG", "INFO", "WARN", "ERROR"]
-        assert self.config["logging"]["level"] in valid_levels, \
-            f"logging.level必须是 {valid_levels} 之一"
         assert isinstance(self.config["logging"]["filtered_levels"], list), \
             "logging.filtered_levels必须是列表"
         assert all(level in valid_levels for level in self.config["logging"]["filtered_levels"]), \
