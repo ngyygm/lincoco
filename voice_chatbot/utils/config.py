@@ -68,9 +68,7 @@ class Config:
             "speech_rate_offset": -0.3,  # 文字阅读速度计算偏差值（字符/秒），用于精细化调整
         },
         "llm": {
-            "api_base": "http://127.0.0.1:5000/v1",  # LLM API基础URL（OpenAI兼容格式）
-            "api_key": "sk-1234",  # LLM API密钥
-            "model_name": "qwen/qwen3-30b-a3b",  # LLM模型名称 gemma-3-27b
+            "provider": "openai",  # LLM服务提供商：openai、ollama 或 glm
             "max_tokens": 1024,  # 最大生成token数，控制回复长度
             "temperature": 0.7,  # 生成温度（0.0-2.0），值越大输出越随机，值越小输出越确定
             "min_sentence_length": 8,  # 最小句子长度（字符数或单词数，根据语言类型），用于流式句子合并
@@ -85,6 +83,24 @@ class Config:
             "max_retries": 3,  # API调用最大重试次数
             "retry_delay": 1.0,  # 重试延迟（秒）
             "request_timeout": 30.0,  # 请求超时（秒）
+            # LLM引擎配置
+            "engines": {
+                "openai": {  # OpenAI引擎配置
+                    "api_base": "http://127.0.0.1:5000/v1",  # OpenAI API基础URL（OpenAI兼容格式）
+                    "api_key": "",  # OpenAI API密钥
+                    "model_name": "qwen/qwen3-30b-a3b",  # 模型名称
+                },
+                "ollama": {  # Ollama引擎配置
+                    "api_base": "http://219.223.187.56:11434/v1",  # Ollama API基础URL（OpenAI兼容格式，默认本地ollama服务）
+                    "api_key": "",  # Ollama API密钥（本地ollama通常不需要，留空即可）
+                    "model_name": "gemma3:27b",  # 模型名称（格式：模型名:标签，如 "gemma3:27b"、"llama2"、"qwen" 等，需要是已下载的Ollama模型）
+                },
+                "glm": {  # GLM引擎配置
+                    "api_base": "https://open.bigmodel.cn/api/paas/v4",  # GLM API基础URL
+                    "api_key": "",  # GLM API密钥
+                    "model_name": "glm-4-flash-250414",  # 模型名称
+                },
+            },
         },
         "tts": {
             "enable_performance_stats": True,  # 是否启用性能统计，输出TTS生成耗时等性能信息

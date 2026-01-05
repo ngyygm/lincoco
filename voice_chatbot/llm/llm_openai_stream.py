@@ -2,7 +2,6 @@
 LLM流式生成模块（OpenAI API实现）
 
 提供OpenAI API兼容的流式文本生成、句子分割与合并、任务取消检查、标签过滤等功能
-参考：56_Lincoco_streamASR_openai_edgetts_realTime.py
 """
 
 import re
@@ -349,9 +348,25 @@ class LLMStreamGenerator:
         self.token_stats = TokenUsageStats()
         
         # 从配置获取LLM参数
-        self.api_base = config.get("llm.api_base", "http://127.0.0.1:5000/v1")
-        self.api_key = config.get("llm.api_key", "sk-1234")
-        self.model_name = config.get("llm.model_name", "Qwen3-8B-GGUF.gguf")
+        # 支持多引擎配置: provider + engines[provider_name]
+        provider = config.get("llm.provider", "openai")
+        engines = config.get("llm.engines", {})
+        
+        # 如果配置了provider且有对应的引擎配置,则从引擎配置中获取参数
+        if provider and provider in engines:
+            engine_config = engines[provider]
+            self.api_base = engine_config.get("api_base", "http://127.0.0.1:5000/v1")
+            self.api_key = engine_config.get("api_key", "")
+            self.model_name = engine_config.get("model_name", "Qwen3-8B-GGUF.gguf")
+            log_info("LLM", f"使用引擎: {provider}, API基础URL: {self.api_base}, 模型: {self.model_name}", indent=1)
+        else:
+            # 向后兼容: 如果没有配置provider或没有对应的引擎配置,则使用直接配置
+            self.api_base = config.get("llm.api_base", "http://127.0.0.1:5000/v1")
+            self.api_key = config.get("llm.api_key", "sk-1234")
+            self.model_name = config.get("llm.model_name", "Qwen3-8B-GGUF.gguf")
+            log_warn("LLM", f"未配置provider或引擎配置,使用直接配置方式 (API: {self.api_base}, 模型: {self.model_name})", indent=1)
+        
+        # 其他通用参数
         self.max_tokens = config.get("llm.max_tokens", 512)
         self.temperature = config.get("llm.temperature", 0.7)
         self.min_sentence_length = config.get("llm.min_sentence_length", 15)
@@ -385,6 +400,160 @@ class LLMStreamGenerator:
             self.openai_client = None
         
         log_info("LLM", f"初始化完成 [API: {'新版本' if self.use_new_api else '旧版本'}, 模型: {self.model_name}]", indent=0)
+        
+        # 测试LLM连接
+        self._test_llm_connection()
+    
+    def _test_llm_connection(self):
+        """
+        测试LLM连接是否正常
+
+        发送一个简单的测试请求，验证LLM服务是否可用
+        """
+        log_info("LLM", "开始测试LLM连接...", indent=0)
+        print("\n" + "=" * 80)
+        print("LLM连接测试")
+        print("=" * 80)
+        print(f"API基础URL: {self.api_base}")
+        print(f"模型名称: {self.model_name}")
+        print(f"API密钥: {'已设置' if self.api_key else '未设置'}")
+
+        # 先测试网络连通性
+        import urllib.request
+        import urllib.error
+        print(f"\n测试网络连通性...")
+        try:
+            from urllib.parse import urlparse
+            parsed_url = urlparse(self.api_base)
+            test_url = f"{parsed_url.scheme}://{parsed_url.netloc}/api/tags"  # Ollama的模型列表接口
+            print(f"  测试URL: {test_url}")
+            
+            req = urllib.request.Request(
+                test_url,
+                headers={'Accept': 'application/json'}
+            )
+            
+            with urllib.request.urlopen(req, timeout=10) as response:
+                print(f"  ✓ 网络连接成功 (状态码: {response.status})")
+                import json
+                try:
+                    data = json.loads(response.read().decode())
+                    models = data.get('models', [])
+                    if models:
+                        print(f"  ✓ 发现 {len(models)} 个可用模型:")
+                        for model in models[:5]:  # 只显示前5个
+                            model_name = model.get('name', 'unknown')
+                            print(f"    - {model_name}")
+                        if len(models) > 5:
+                            print(f"    ... 还有 {len(models) - 5} 个模型")
+                    else:
+                        print(f"  ⚠ 未发现可用模型")
+                except json.JSONDecodeError:
+                    print(f"  ⚠ 响应不是有效的JSON格式")
+        except urllib.error.HTTPError as e:
+            print(f"  ✗ HTTP错误: {e.code} - {e.reason}")
+        except urllib.error.URLError as e:
+            print(f"  ✗ 网络错误: {e.reason}")
+            if "Connection refused" in str(e.reason):
+                print(f"  💡 提示: 请检查Ollama服务是否已启动，地址是否正确")
+            elif "timed out" in str(e.reason):
+                print(f"  💡 提示: 连接超时，可能是网络问题或服务器响应过慢")
+        except Exception as e:
+            print(f"  ✗ 连通性测试失败: {type(e).__name__}: {str(e)}")
+
+        print(f"\n发送LLM测试请求...")
+
+        test_success = False
+        error_msg = ""
+        
+        try:
+            # 发送一个简单的测试请求
+            test_messages = [
+                {"role": "user", "content": "你好，请回复'连接成功'。"}
+            ]
+            
+            print(f"\n发送测试请求...")
+            
+            if self.use_new_api and self.openai_client:
+                # 使用新版本API
+                response = self.openai_client.chat.completions.create(
+                    model=self.model_name,
+                    messages=test_messages,
+                    max_tokens=10,
+                    temperature=0.7,
+                    stream=False
+                )
+                
+                # 获取响应内容
+                if response.choices and len(response.choices) > 0:
+                    reply = response.choices[0].message.content
+                    test_success = True
+                    print(f"\n✓ LLM响应成功!")
+                    print(f"响应内容: {reply}")
+                    print(f"使用的模型: {response.model}")
+                    if hasattr(response, 'usage') and response.usage:
+                        print(f"Token使用: {response.usage}")
+                    log_info("LLM", f"LLM连接测试成功, 响应: {reply}", indent=0)
+                else:
+                    error_msg = "响应中没有choices"
+                    print(f"\n✗ 响应格式错误: {error_msg}")
+                    log_error("LLM", f"LLM连接测试失败: {error_msg}", indent=0)
+            else:
+                # 使用旧版本API
+                response = openai.ChatCompletion.create(
+                    model=self.model_name,
+                    messages=test_messages,
+                    max_tokens=10,
+                    temperature=0.7,
+                    stream=False
+                )
+                
+                # 获取响应内容
+                if response.choices and len(response.choices) > 0:
+                    reply = response.choices[0].message.content
+                    test_success = True
+                    print(f"\n✓ LLM响应成功!")
+                    print(f"响应内容: {reply}")
+                    log_info("LLM", f"LLM连接测试成功, 响应: {reply}", indent=0)
+                else:
+                    error_msg = "响应中没有choices"
+                    print(f"\n✗ 响应格式错误: {error_msg}")
+                    log_error("LLM", f"LLM连接测试失败: {error_msg}", indent=0)
+                    
+        except openai.APIConnectionError as e:
+            error_msg = f"API连接错误: {str(e)}"
+            print(f"\n✗ {error_msg}")
+            log_error("LLM", f"LLM连接测试失败: {error_msg}", indent=0)
+        except openai.APIError as e:
+            error_msg = f"API错误: {str(e)}"
+            print(f"\n✗ {error_msg}")
+            # 打印详细的错误信息
+            if hasattr(e, 'response') and e.response:
+                print(f"响应状态码: {e.response.status_code if hasattr(e.response, 'status_code') else '未知'}")
+                try:
+                    print(f"响应内容: {e.response.text[:500]}")  # 只打印前500字符
+                except:
+                    pass
+            log_error("LLM", f"LLM连接测试失败: {error_msg}", indent=0)
+        except openai.RateLimitError as e:
+            error_msg = f"速率限制错误: {str(e)}"
+            print(f"\n✗ {error_msg}")
+            log_error("LLM", f"LLM连接测试失败: {error_msg}", indent=0)
+        except openai.TimeoutError as e:
+            error_msg = f"请求超时: {str(e)}"
+            print(f"\n✗ {error_msg}")
+            log_error("LLM", f"LLM连接测试失败: {error_msg}", indent=0)
+        except Exception as e:
+            error_msg = f"未知错误: {type(e).__name__}: {str(e)}"
+            print(f"\n✗ {error_msg}")
+            log_error("LLM", f"LLM连接测试失败: {error_msg}", indent=0)
+        
+        print("=" * 80)
+        if test_success:
+            print(f"测试结果: ✓ 成功")
+        else:
+            print(f"测试结果: ✗ 失败")
+        print("=" * 80 + "\n")
     
     def cleanup(self):
         """
