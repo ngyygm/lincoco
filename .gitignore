@@ -120,8 +120,10 @@ htmlcov/
 .dmypy.json
 dmypy.json
 
-# MeloTTS 相关文件（忽略下载缓存和输出文件）
-MeloTTS/hf_download/
-MeloTTS/out/
-MeloTTS/.git/
+# Plugin 相关文件（忽略插件模块的缓存、输出和内部 git）
+plugin/melotts/hf_download/
+plugin/melotts/out/
+plugin/melotts/.git/
+plugin/cosyvoice/.git/
+plugin/3d-speaker/.git/
 
