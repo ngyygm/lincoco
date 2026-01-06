@@ -271,7 +271,7 @@ class Config:
             # 性能分析配置
             "performance_analysis": {
                 "enabled": True,  # 是否启用响应耗时详细分析,在第一个TTS播放前输出
-                "show_details": False,  # 是否输出各个阶段的细节(True=显示详细阶段信息,False=只显示总耗时)
+                "show_details": True,  # 是否输出各个阶段的细节(True=显示详细阶段信息,False=只显示总耗时)
             },
         },
     }

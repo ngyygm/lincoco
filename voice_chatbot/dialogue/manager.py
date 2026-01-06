@@ -1816,7 +1816,7 @@ class DialogueManager:
                         if played_text:
                             # 去除前导空白字符（包括换行符、空格等）
                             played_text_trimmed = played_text.lstrip()
-                            log_info("LLM", f"audio_player_thread 记录到对话历史: {played_text_trimmed}", indent=0)
+                            log_debug("LLM", f"audio_player_thread 记录到对话历史: {played_text_trimmed}", indent=0)
                             self.conversation_history.append({"role": "assistant", "content": played_text_trimmed})
                         # 限制历史记录长度
                         self._limit_history_length()
