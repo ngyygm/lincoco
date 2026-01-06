@@ -5,7 +5,6 @@ TTS模块 (tts)
 """
 
 from .edge_tts_engine import EdgeTTSEngine
-from .audio_player import AudioPlayer, PlaybackStatus, InterruptReason
 
 # CosyVoice3引擎（可选，需要CosyVoice模型）
 try:
@@ -29,8 +28,5 @@ __all__ = [
     'HAS_COSYVOICE3',
     'MeloTTSEngine',
     'HAS_MELOTTS',
-    'AudioPlayer',
-    'PlaybackStatus',
-    'InterruptReason',
 ]
 

@@ -377,6 +377,7 @@ def main():
         
         log_info("MAIN", "系统已启动，等待用户输入...", indent=0)
         log_info("MAIN", "按 Ctrl+C 退出", indent=0)
+        log_info("MAIN", "请开始快乐的聊天吧！！", indent=0)
         
         # 保持主线程运行
         # 注意：KeyboardInterrupt会被SIGINT信号处理器捕获

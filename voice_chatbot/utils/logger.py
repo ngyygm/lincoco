@@ -8,6 +8,7 @@
 import os
 import sys
 import threading
+import inspect
 from datetime import datetime
 from pathlib import Path
 import re
@@ -209,11 +210,54 @@ def get_thread_name():
     return name[:10]  # 限制长度
 
 
+def get_caller_source():
+    """
+    获取调用者的源代码文件名（不含路径和扩展名）
+    自动跳过logger.py内部的调用栈，找到实际的调用者
+    
+    Returns:
+        文件名（不含路径和扩展名），如 "manager"、"fun_asr_stream"，如果无法获取则返回 None
+    """
+    try:
+        # 获取调用栈
+        frame = inspect.currentframe()
+        # 跳过当前函数（get_caller_source本身）
+        if frame is None:
+            return None
+        frame = frame.f_back
+        
+        # 跳过logger.py内部的调用栈，找到实际的调用者
+        logger_file = Path(__file__).name  # logger.py
+        while frame is not None:
+            frame = frame.f_back
+            if frame is None:
+                break
+            
+            filename = frame.f_code.co_filename
+            if not filename:
+                continue
+            
+            # 检查是否是logger.py文件
+            caller_file = Path(filename).name
+            if caller_file != logger_file:
+                # 找到了非logger.py的调用者
+                # 提取文件名（不含路径和扩展名）
+                filepath = Path(filename)
+                return filepath.stem  # 获取不含扩展名的文件名
+        
+        return None
+        
+    except Exception:
+        # 如果获取失败，返回None
+        return None
+
+
 class Logger:
     """日志系统类"""
     
     def __init__(self, log_level='INFO', log_file_enabled=True, log_dir='logs', 
-                 filtered_levels=None, filtered_categories=None, category_colors=None):
+                 filtered_levels=None, filtered_categories=None, category_colors=None,
+                 show_source=True):
         """
         初始化日志系统
         
@@ -224,6 +268,7 @@ class Logger:
             filtered_levels: 被过滤的日志级别列表（黑名单），如 ["DEBUG"]
             filtered_categories: 被过滤的日志类别列表（黑名单），如 ["EVENT", "VAD"]
             category_colors: 日志类别专属颜色字典，格式如 {"ASR": "GREEN", "LLM": "CYAN"}
+            show_source: 是否显示代码来源前缀（文件名），默认为True
         """
         self.log_level = log_level.upper()
         self.log_level_num = LOG_LEVELS.get(self.log_level, LOG_LEVELS['INFO'])
@@ -232,6 +277,7 @@ class Logger:
         self.current_log_file = None
         self.log_file_handle = None
         self._lock = threading.Lock()
+        self.show_source = show_source
         
         # 过滤配置（黑名单）
         self.filtered_levels = set(level.upper() for level in (filtered_levels or []))
@@ -315,7 +361,7 @@ class Logger:
         level_num = LOG_LEVELS.get(level_upper, LOG_LEVELS['INFO'])
         return level_num >= self.log_level_num
     
-    def log(self, level, category, message, indent=0, show_thread=True, inline=False, color=None):
+    def log(self, level, category, message, indent=0, show_thread=True, inline=False, color=None, source=None):
         """
         标准化日志输出
         
@@ -327,6 +373,7 @@ class Logger:
             show_thread: 是否显示线程信息
             inline: 是否在同一行更新（使用\r，用于流式输出）
             color: 颜色代码（可选），如果提供则使用该颜色，否则使用默认颜色
+            source: 代码来源（文件名，不含路径和扩展名），如果为None则自动获取
         """
         if not self._should_log(level, category):
             return
@@ -342,7 +389,15 @@ class Logger:
         level_str = level.ljust(5)
         category_str = category.ljust(6)
         
-        log_message = f"[{timestamp}]{thread_info} [{level_str}] [{category_str}] {indent_str}{message}"
+        # 获取代码来源（如果启用且未提供）
+        source_str = ""
+        if self.show_source:
+            if source is None:
+                source = get_caller_source()  # 自动跳过logger.py内部的调用栈
+            if source:
+                source_str = f"[{source}] "
+        
+        log_message = f"[{timestamp}]{thread_info} [{level_str}] [{category_str}] {source_str}{indent_str}{message}"
         
         # 确定使用的颜色：优先使用传入的 color 参数，否则使用 category 专属颜色，最后使用默认颜色
         final_color = None
@@ -382,21 +437,21 @@ class Logger:
                     self.log_file_handle.write(clean_message + '\n')
                     self.log_file_handle.flush()
     
-    def info(self, category, message, indent=0, show_thread=True, inline=False, color=None):
+    def info(self, category, message, indent=0, show_thread=True, inline=False, color=None, source=None):
         """信息日志"""
-        self.log("INFO", category, message, indent, show_thread, inline, color)
+        self.log("INFO", category, message, indent, show_thread, inline, color, source)
     
-    def warn(self, category, message, indent=0, show_thread=True, color=None):
+    def warn(self, category, message, indent=0, show_thread=True, color=None, source=None):
         """警告日志"""
-        self.log("WARN", category, message, indent, show_thread, False, color)
+        self.log("WARN", category, message, indent, show_thread, False, color, source)
     
-    def error(self, category, message, indent=0, show_thread=True, color=None):
+    def error(self, category, message, indent=0, show_thread=True, color=None, source=None):
         """错误日志"""
-        self.log("ERROR", category, message, indent, show_thread, False, color)
+        self.log("ERROR", category, message, indent, show_thread, False, color, source)
     
-    def debug(self, category, message, indent=0, show_thread=True, color=None):
+    def debug(self, category, message, indent=0, show_thread=True, color=None, source=None):
         """调试日志"""
-        self.log("DEBUG", category, message, indent, show_thread, False, color)
+        self.log("DEBUG", category, message, indent, show_thread, False, color, source)
     
     def write_to_file(self, message: str):
         """
@@ -440,6 +495,7 @@ def init_logger(log_level='INFO', log_file_enabled=True, log_dir='logs',
     global _global_logger
     
     category_colors = None
+    show_source = True
     
     # 如果提供了 config，从配置读取过滤参数和类别颜色
     if config:
@@ -449,6 +505,8 @@ def init_logger(log_level='INFO', log_file_enabled=True, log_dir='logs',
             filtered_categories = config.get("logging.filtered_categories", [])
         # 读取类别颜色配置
         category_colors = config.get("logging.category_colors", None)
+        # 读取是否显示来源配置
+        show_source = config.get("logging.show_source", True)
     
     with _logger_lock:
         if _global_logger is None:
@@ -458,7 +516,8 @@ def init_logger(log_level='INFO', log_file_enabled=True, log_dir='logs',
                 log_dir=log_dir,
                 filtered_levels=filtered_levels,
                 filtered_categories=filtered_categories,
-                category_colors=category_colors
+                category_colors=category_colors,
+                show_source=show_source
             )
         else:
             # 如果 Logger 已存在，更新过滤配置和类别颜色
@@ -469,6 +528,8 @@ def init_logger(log_level='INFO', log_file_enabled=True, log_dir='logs',
                     color_code = _parse_color_name(color_name)
                     if color_code:
                         _global_logger.category_colors[category.upper()] = color_code
+            # 更新是否显示来源
+            _global_logger.show_source = show_source
 
 
 def update_logger_filter(config):
@@ -517,24 +578,24 @@ def _get_global_logger():
     return _global_logger
 
 
-def log_info(category, message, indent=0, show_thread=True, inline=False, color=None):
+def log_info(category, message, indent=0, show_thread=True, inline=False, color=None, source=None):
     """信息日志（全局函数）"""
-    _get_global_logger().info(category, message, indent, show_thread, inline, color)
+    _get_global_logger().info(category, message, indent, show_thread, inline, color, source)
 
 
-def log_warn(category, message, indent=0, show_thread=True, color=None):
+def log_warn(category, message, indent=0, show_thread=True, color=None, source=None):
     """警告日志（全局函数）"""
-    _get_global_logger().warn(category, message, indent, show_thread, color)
+    _get_global_logger().warn(category, message, indent, show_thread, color, source)
 
 
-def log_error(category, message, indent=0, show_thread=True, color=None):
+def log_error(category, message, indent=0, show_thread=True, color=None, source=None):
     """错误日志（全局函数）"""
-    _get_global_logger().error(category, message, indent, show_thread, color)
+    _get_global_logger().error(category, message, indent, show_thread, color, source)
 
 
-def log_debug(category, message, indent=0, show_thread=True, color=None):
+def log_debug(category, message, indent=0, show_thread=True, color=None, source=None):
     """调试日志（全局函数）"""
-    _get_global_logger().debug(category, message, indent, show_thread, color)
+    _get_global_logger().debug(category, message, indent, show_thread, color, source)
 
 
 def log_with_timestamp(message):

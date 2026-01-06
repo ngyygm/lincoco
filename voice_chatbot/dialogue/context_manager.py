@@ -133,8 +133,6 @@ class ContextManager:
                 self._current_context = None
                 log_info("CTX", f"[CANCEL-003] 当前上下文引用已清空（_current_context=None）", indent=1)
                 
-                log_info("CTX", f"[CANCEL-004] 取消当前任务上下文完成: ID={task_id}", indent=0)
-                
                 # 发布TASK_CANCELLED事件
                 if self._event_bus is not None:
                     try:

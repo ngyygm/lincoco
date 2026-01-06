@@ -735,6 +735,7 @@ class LLMStreamGenerator:
         # 添加历史对话
         with self.task_lock:
             messages.extend(self.conversation_history.copy())
+            messages = messages[:-1]  # 删除最后一条历史记录（当前用户输入）
         
         # 构建用户消息
         user_content = user_input
@@ -996,7 +997,7 @@ class LLMStreamGenerator:
                     sentence_count += 1
                     # 计算从流式开始到现在的耗时
                     elapsed_from_stream = time.time() - stream_start_time
-                    log_info("LLM", f"句子{sentence_count} (合并{len(accumulated_sentences)}句，长度{accumulated_length}): {merged_sentence} [耗时: {elapsed_from_stream*1000:.1f}ms]", indent=1)
+                    log_debug("LLM", f"句子{sentence_count} (合并{len(accumulated_sentences)}句，长度{accumulated_length}): {merged_sentence} [耗时: {elapsed_from_stream*1000:.1f}ms]", indent=1)
                     
                     # 调用回调函数（只去除开头的空白字符，保留末尾的所有字符）
                     try:
@@ -1193,7 +1194,7 @@ class LLMStreamGenerator:
                 if merged_sentence.strip():
                     sentence_count += 1
                     elapsed_from_stream = time.time() - stream_start_time
-                    log_info("LLM", f"句子{sentence_count}(末尾，强制发送): {merged_sentence} [耗时: {elapsed_from_stream*1000:.1f}ms]", indent=1)
+                    log_debug("LLM", f"句子{sentence_count}(末尾，强制发送): {merged_sentence} [耗时: {elapsed_from_stream*1000:.1f}ms]", indent=1)
                     
                     # 调用回调函数（保留原始内容，只去除开头空白，保留末尾字符）
                     if not self._check_task_cancelled(task_id):
@@ -1222,7 +1223,7 @@ class LLMStreamGenerator:
             stream_elapsed = time.time() - stream_start_time
 
             full_response_text = full_response_text.lstrip()
-            log_info("LLM", f"流式生成完成，共{sentence_count}个句子 [耗时: {stream_elapsed*1000:.1f}ms]", indent=0)
+            log_debug("LLM", f"流式生成完成，共{sentence_count}个句子 [耗时: {stream_elapsed*1000:.1f}ms]", indent=0)
             log_info("LLM", f"完整回答: {full_response_text}", indent=1)
             
             return full_response_text

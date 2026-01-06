@@ -71,8 +71,7 @@ class DialogueState:
         self.config = config
         
         # 从配置获取参数
-        self.min_play_duration_to_record = config.get("dialogue.min_play_duration_to_record", 0.5)
-        self.max_history_length = config.get("dialogue.max_history_length", 50)  # 最大历史记录长度（对话轮数）
+        self.max_history_length = config.get("llm.max_history_length", 50)  # 最大历史记录长度（对话轮数）
         
         # 状态管理（主系统和副系统）
         self._main_state = MainSystemState.IDLE
@@ -91,11 +90,7 @@ class DialogueState:
         # 状态转换历史（用于日志和调试）
         self._state_transition_history: List[Dict[str, Any]] = []
         self._max_transition_history = 100  # 最多保存100条转换记录
-        
-        # 状态持久化配置
-        self._auto_save = config.get("dialogue.auto_save_state", False)
-        self._state_file = config.get("dialogue.state_file", "dialogue_state.json")
-        
+
         log_info("STATE", "对话状态管理器初始化完成", indent=0)
     
     def get_main_state(self) -> MainSystemState:
@@ -148,17 +143,10 @@ class DialogueState:
             # 限制历史记录数量
             if len(self._state_transition_history) > self._max_transition_history:
                 self._state_transition_history.pop(0)
-            
+
             # 输出状态转换日志
             log_info("STATE", f"主系统状态转换: {old_state.value} → {new_state.value}" + (f" ({reason})" if reason else ""), indent=0)
-            
-            # 自动保存状态（如果启用）
-            if self._auto_save:
-                try:
-                    self.save_state(self._state_file)
-                except Exception as e:
-                    log_warn("STATE", f"自动保存状态失败: {e}", indent=1)
-    
+
     def set_sub_state(self, new_state: SubSystemState, reason: str = ""):
         """
         设置副系统状态（带日志记录）
@@ -189,17 +177,10 @@ class DialogueState:
             # 限制历史记录数量
             if len(self._state_transition_history) > self._max_transition_history:
                 self._state_transition_history.pop(0)
-            
+
             # 输出状态转换日志
             log_info("STATE", f"副系统状态转换: {old_state.value} → {new_state.value}" + (f" ({reason})" if reason else ""), indent=0)
-            
-            # 自动保存状态（如果启用）
-            if self._auto_save:
-                try:
-                    self.save_state(self._state_file)
-                except Exception as e:
-                    log_warn("STATE", f"自动保存状态失败: {e}", indent=1)
-    
+
     # 向后兼容方法
     def get_state(self) -> SystemState:
         """
@@ -341,10 +322,7 @@ class DialogueState:
             play_duration: 播放时长（秒），用于判断是否记录
         """
         with self._history_lock:
-            # 检查播放时长（如果被打断）
-            if is_interrupted and play_duration < self.min_play_duration_to_record:
-                log_debug("HIST", f"播放时长不足({play_duration:.2f}秒 < {self.min_play_duration_to_record}秒)，不记录到历史", indent=1)
-                return
+            # 播放了多少就记录多少，不再检查播放时长阈值
             
             # 去除前导空白字符（包括换行符、空格等）
             response_trimmed = response.lstrip()
@@ -364,8 +342,7 @@ class DialogueState:
                 response_with_mark = response_trimmed
             
             # 添加到历史
-            if user_input and response_with_mark:
-                self._conversation_history.append({"role": "user", "content": user_input})
+            if response_with_mark:
                 self._conversation_history.append({"role": "assistant", "content": response_with_mark})
                 
                 # 限制历史记录长度（max_history_length是对话轮数，每轮包含用户和助手两条消息）
@@ -414,10 +391,10 @@ class DialogueState:
     def get_state_transition_history(self, limit: Optional[int] = None) -> List[Dict[str, Any]]:
         """
         获取状态转换历史
-        
+
         Args:
             limit: 限制返回的记录数量，如果为None则返回全部
-            
+
         Returns:
             状态转换历史列表（副本）
         """
@@ -426,133 +403,7 @@ class DialogueState:
             if limit is not None:
                 history = history[-limit:]
             return history
-    
-    def save_state(self, file_path: str) -> bool:
-        """
-        保存状态到文件（JSON格式）
-        
-        Args:
-            file_path: 保存路径
-            
-        Returns:
-            True表示保存成功，False表示失败
-        """
-        try:
-            # 先获取对话历史（在锁外，避免锁嵌套）
-            conversation_history = self.get_conversation_history()
-            
-            with self._state_lock:
-                state_data = {
-                    "main_state": self._main_state.value,
-                    "sub_state": self._sub_state.value,
-                    "current_state": self._main_state.value,  # 向后兼容
-                    "current_task_id": self._current_task_id,
-                    "conversation_history": conversation_history,
-                    "task_info": None,
-                    "timestamp": time.time()
-                }
-                
-                # 保存当前任务信息（如果存在）
-                if self._current_task:
-                    state_data["task_info"] = {
-                        "task_id": self._current_task.task_id,
-                        "user_input": self._current_task.user_input,
-                        "response_text": self._current_task.response_text,
-                        "start_time": self._current_task.start_time,
-                        "status": self._current_task.status
-                    }
-            
-            # 确保目录存在
-            file_path_obj = Path(file_path)
-            file_path_obj.parent.mkdir(parents=True, exist_ok=True)
-            
-            # 保存到文件
-            with open(file_path, 'w', encoding='utf-8') as f:
-                json.dump(state_data, f, ensure_ascii=False, indent=2)
-            
-            log_info("STATE", f"状态已保存到: {file_path}", indent=0)
-            return True
-        except Exception as e:
-            log_error("STATE", f"保存状态失败: {e}", indent=0)
-            return False
-    
-    def load_state(self, file_path: str) -> bool:
-        """
-        从文件加载状态
-        
-        Args:
-            file_path: 文件路径
-            
-        Returns:
-            True表示加载成功，False表示失败
-        """
-        try:
-            if not Path(file_path).exists():
-                log_warn("STATE", f"状态文件不存在: {file_path}", indent=0)
-                return False
-            
-            with open(file_path, 'r', encoding='utf-8') as f:
-                state_data = json.load(f)
-            
-            # 加载对话历史
-            with self._history_lock:
-                self._conversation_history = state_data.get("conversation_history", [])
-            
-            # 加载任务ID和状态
-            with self._state_lock:
-                self._current_task_id = state_data.get("current_task_id", 0)
-                
-                # 加载任务信息（如果存在）
-                task_info_data = state_data.get("task_info")
-                if task_info_data:
-                    self._current_task = TaskInfo(
-                        task_id=task_info_data.get("task_id", 0),
-                        user_input=task_info_data.get("user_input", ""),
-                        response_text=task_info_data.get("response_text", ""),
-                        start_time=task_info_data.get("start_time", 0.0),
-                        status=task_info_data.get("status", "pending")
-                    )
-                
-                # 加载主系统状态（但不触发转换日志，因为这是加载）
-                main_state_value = state_data.get("main_state")
-                if main_state_value is None:
-                    # 向后兼容：尝试从旧格式加载
-                    main_state_value = state_data.get("current_state", "idle")
-                
-                try:
-                    self._main_state = MainSystemState(main_state_value)
-                except ValueError:
-                    log_warn("STATE", f"无效的主系统状态值: {main_state_value}，使用默认状态IDLE", indent=0)
-                    self._main_state = MainSystemState.IDLE
-                
-                # 加载副系统状态（但不触发转换日志，因为这是加载）
-                sub_state_value = state_data.get("sub_state")
-                if sub_state_value is None:
-                    # 向后兼容：尝试从旧格式推断
-                    old_state_value = state_data.get("current_state", "idle")
-                    if old_state_value == "processing":
-                        sub_state_value = "processing"
-                    elif old_state_value == "paused":
-                        sub_state_value = "paused"
-                    elif old_state_value == "playing":
-                        # 向后兼容：旧格式的playing可能是主系统或副系统状态
-                        # 这里假设是副系统状态（speaking）
-                        sub_state_value = "speaking"
-                    else:
-                        sub_state_value = "none"
-                
-                try:
-                    self._sub_state = SubSystemState(sub_state_value)
-                except ValueError:
-                    log_warn("STATE", f"无效的副系统状态值: {sub_state_value}，使用默认状态NONE", indent=0)
-                    self._sub_state = SubSystemState.NONE
-            
-            log_info("STATE", f"状态已从文件加载: {file_path}", indent=0)
-            return True
-        except Exception as e:
-            log_error("STATE", f"加载状态失败: {e}", indent=0)
-            return False
-    
+
     def reset(self):
         """重置状态（恢复到初始状态）"""
         with self._state_lock:

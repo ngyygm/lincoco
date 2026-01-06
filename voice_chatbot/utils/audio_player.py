@@ -15,7 +15,9 @@ import pygame
 from pydub import AudioSegment
 
 from voice_chatbot.utils import log_info, log_warn, log_error, log_debug
-from voice_chatbot.dialogue.events import EventBus, EventType, create_event
+
+# 延迟导入 dialogue.events 以避免循环导入
+# from voice_chatbot.dialogue.events import EventBus, EventType, create_event
 
 
 class PlaybackStatus(Enum):
@@ -39,7 +41,7 @@ class AudioPlayer:
     def __init__(self, config, task_lock: Optional[threading.Lock] = None,
                  get_current_task_id: Optional[callable] = None,
                  get_interrupt_flag: Optional[callable] = None,
-                 event_bus: Optional[EventBus] = None):
+                 event_bus: Optional[Any] = None):
         """
         初始化音频播放器
         
@@ -77,8 +79,9 @@ class AudioPlayer:
         
         # 流式输出状态（用于同一行更新）
         self._last_logged_text = ""  # 上次输出的文本
+        self._full_played_text = ""  # 完整的已播放文本（所有已完成句子 + 当前句子已播放部分）
         
-        self._publish_log("DEBUG", "音频播放器初始化完成")
+        log_debug("PLAY", "音频播放器初始化完成")
     
     def _init_mixer(self):
         """初始化pygame.mixer（只初始化一次）"""
@@ -86,9 +89,9 @@ class AudioPlayer:
             try:
                 pygame.mixer.init()
                 self._pygame_mixer_initialized = True
-                self._publish_log("DEBUG", "pygame.mixer初始化完成", indent=1)
+                log_debug("PLAY", "pygame.mixer初始化完成", indent=1)
             except Exception as e:
-                self._publish_log("ERROR", f"pygame.mixer初始化失败: {e}", indent=1)
+                log_error("PLAY", "pygame.mixer初始化失败: {e}", indent=1)
                 raise
     
     def _check_task_cancelled(self, task_id: Optional[int]) -> bool:
@@ -137,9 +140,9 @@ class AudioPlayer:
             if self._current_channel:
                 try:
                     self._current_channel.set_volume(volume)
-                    self._publish_log("DEBUG", f"音量设置为: {volume:.2f}", indent=1)
+                    log_debug("PLAY", "音量设置为: {volume:.2f}", indent=1)
                 except Exception as e:
-                    self._publish_log("WARN", f"设置音量失败: {e}", indent=1)
+                    log_warn("PLAY", f"设置音量失败: {e}", indent=1)
     
     def get_volume(self) -> float:
         """
@@ -254,11 +257,11 @@ class AudioPlayer:
                     PlaybackStatus.PAUSED: "已暂停",
                     PlaybackStatus.STOPPED: "已停止"
                 }.get(self._status, f"未知状态({self._status.value})")
-                self._publish_log("WARN", f"当前未在播放，无法暂停（当前状态: {status_desc}）", indent=1)
+                log_warn("PLAY", f"当前未在播放，无法暂停（当前状态: {status_desc}）", indent=1)
                 return False
             
             if task_id is not None and task_id != self._current_task_id:
-                self._publish_log("WARN", f"任务ID不匹配，无法暂停（当前任务ID: {self._current_task_id}, 请求任务ID: {task_id}）", indent=1)
+                log_warn("PLAY", f"任务ID不匹配，无法暂停（当前任务ID: {self._current_task_id}, 请求任务ID: {task_id}）", indent=1)
                 return False
             
             try:
@@ -266,10 +269,10 @@ class AudioPlayer:
                     self._current_channel.pause()
                     self._status = PlaybackStatus.PAUSED
                     self._pause_start_time = time.time()
-                    self._publish_log("DEBUG", "播放已暂停", indent=1)
+                    log_debug("PLAY", "播放已暂停", indent=1)
                     return True
             except Exception as e:
-                self._publish_log("ERROR", f"暂停播放失败: {e}", indent=1)
+                log_error("PLAY", f"暂停播放失败: {e}", indent=1)
                 return False
         
         return False
@@ -291,11 +294,11 @@ class AudioPlayer:
                     PlaybackStatus.PLAYING: "正在播放",
                     PlaybackStatus.STOPPED: "已停止"
                 }.get(self._status, f"未知状态({self._status.value})")
-                self._publish_log("WARN", f"当前未暂停，无法恢复（当前状态: {status_desc}）", indent=1)
+                log_warn("PLAY", f"当前未暂停，无法恢复（当前状态: {status_desc}）", indent=1)
                 return False
             
             if task_id is not None and task_id != self._current_task_id:
-                self._publish_log("WARN", f"任务ID不匹配，无法恢复（当前任务ID: {self._current_task_id}, 请求任务ID: {task_id}）", indent=1)
+                log_warn("PLAY", f"任务ID不匹配，无法恢复（当前任务ID: {self._current_task_id}, 请求任务ID: {task_id}）", indent=1)
                 return False
             
             try:
@@ -309,10 +312,10 @@ class AudioPlayer:
                         self._total_pause_duration += pause_duration
                         self._pause_start_time = None
                     
-                    self._publish_log("DEBUG", "播放已恢复", indent=1)
+                    log_debug("PLAY", "播放已恢复", indent=1)
                     return True
             except Exception as e:
-                self._publish_log("ERROR", f"恢复播放失败: {e}", indent=1)
+                log_error("PLAY", f"恢复播放失败: {e}", indent=1)
                 return False
         
         return False
@@ -332,18 +335,18 @@ class AudioPlayer:
         """
         import threading
         current_thread = threading.current_thread().name
-        self._publish_log("DEBUG", f"[AUDIO_STOP] stop() 被调用 (task_id={task_id}, 线程={current_thread})", indent=1)
+        log_debug("PLAY", f"[AUDIO_STOP] stop() 被调用 (task_id={task_id}, 线程={current_thread})", indent=1)
         with self._state_lock:
             if self._status not in [PlaybackStatus.PLAYING, PlaybackStatus.PAUSED]:
                 status_desc = {
                     PlaybackStatus.IDLE: "空闲",
                     PlaybackStatus.STOPPED: "已停止"
                 }.get(self._status, f"未知状态({self._status.value})")
-                self._publish_log("WARN", f"当前未在播放或暂停，无法停止（当前状态: {status_desc}）", indent=1)
+                log_warn("PLAY", f"当前未在播放或暂停，无法停止（当前状态: {status_desc}）", indent=1)
                 return False
             
             if task_id is not None and task_id != self._current_task_id:
-                self._publish_log("WARN", f"任务ID不匹配，无法停止（当前任务ID: {self._current_task_id}, 请求任务ID: {task_id}）", indent=1)
+                log_warn("PLAY", f"任务ID不匹配，无法停止（当前任务ID: {self._current_task_id}, 请求任务ID: {task_id}）", indent=1)
                 return False
             
             try:
@@ -354,10 +357,10 @@ class AudioPlayer:
                 self._play_start_time = None
                 self._pause_start_time = None
                 self._total_pause_duration = 0.0
-                self._publish_log("DEBUG", "播放已停止", indent=1)
+                log_debug("PLAY", "播放已停止", indent=1)
                 return True
             except Exception as e:
-                self._publish_log("ERROR", f"停止播放失败: {e}", indent=1)
+                log_error("PLAY", f"停止播放失败: {e}", indent=1)
                 return False
         
         return False
@@ -369,7 +372,7 @@ class AudioPlayer:
         停止当前播放，清理pygame.mixer资源
         """
         try:
-            self._publish_log("DEBUG", "开始清理音频播放器资源", indent=0)
+            log_debug("PLAY", "开始清理音频播放器资源", indent=0)
             
             # 停止当前播放
             with self._state_lock:
@@ -377,7 +380,7 @@ class AudioPlayer:
                     try:
                         self._current_channel.stop()
                     except Exception as e:
-                        self._publish_log("WARN", f"停止播放通道时出错: {e}", indent=1)
+                        log_warn("PLAY", f"停止播放通道时出错: {e}", indent=1)
                     self._current_channel = None
                 if self._current_sound:
                     self._current_sound = None
@@ -392,11 +395,11 @@ class AudioPlayer:
             # 清理pygame.mixer（可选，因为可能被其他地方使用）
             # 注意：不调用 pygame.mixer.quit()，因为可能影响其他模块
             
-            self._publish_log("DEBUG", "音频播放器资源清理完成", indent=0)
+            log_debug("PLAY", "音频播放器资源清理完成", indent=0)
         except Exception as e:
-            self._publish_log("ERROR", f"清理音频播放器资源时出错: {e}", indent=1)
+            log_debug("PLAY", f"清理音频播放器资源时出错: {e}", indent=1)
             import traceback
-            self._publish_log("ERROR", f"异常堆栈:\n{traceback.format_exc()}", indent=2)
+            log_debug("PLAY", f"异常堆栈:\n{traceback.format_exc()}", indent=2)
     
     def play(self, audio_segment: AudioSegment, task_id: int,
              on_complete_callback: Optional[Callable[[bool, Optional[InterruptReason]], None]] = None,
@@ -430,12 +433,12 @@ class AudioPlayer:
             
             # 检查任务是否被取消
             if self._check_task_cancelled(task_id):
-                self._publish_log("WARN", f"任务 {task_id} 在开始播放前被取消", indent=1)
+                log_warn("PLAY", f"任务 {task_id} 在开始播放前被取消", indent=1)
                 if on_complete_callback:
                     try:
                         on_complete_callback(True, InterruptReason.TASK_CANCELLED)
                     except Exception as e:
-                        self._publish_log("ERROR", f"播放完成回调错误: {e}", indent=1)
+                        log_error("PLAY", f"播放完成回调错误: {e}", indent=1)
                 return False
             
             # 将AudioSegment转换为WAV格式的bytes（pygame支持WAV）
@@ -464,7 +467,7 @@ class AudioPlayer:
                 self._total_pause_duration = 0.0
                 self._last_logged_text = ""  # 重置流式输出状态（开始新的播放）
             
-            self._publish_log("DEBUG", f"开始播放 [任务ID: {task_id}, 时长: {self._audio_duration:.2f}秒]", indent=1)
+            log_debug("PLAY", f"开始播放 [任务ID: {task_id}, 时长: {self._audio_duration:.2f}秒]", indent=1)
             
             # 等待播放完成或被打断
             while True:
@@ -476,7 +479,7 @@ class AudioPlayer:
                     if channel:
                         channel.stop()
                     interrupt_reason = InterruptReason.TASK_CANCELLED
-                    self._publish_log("WARN", f"任务 {task_id} 被取消，停止播放", indent=1)
+                    log_warn("PLAY", f"任务 {task_id} 被取消，停止播放", indent=1)
                     break
                 
                 # 检查用户打断
@@ -488,7 +491,7 @@ class AudioPlayer:
                     # 继续播放，等待延迟验证结果（由外部决定是暂停还是继续）
                     # 延迟验证通过后，外部会调用pause()方法暂停
                     # 延迟验证失败时，pending_interrupt会被清除，这里会继续正常播放
-                    self._publish_log("DEBUG", "检测到可能打断标记，继续播放等待延迟验证结果", indent=1)
+                    log_debug("PLAY", "检测到可能打断标记，继续播放等待延迟验证结果", indent=1)
                     # 继续正常播放循环，不暂停
                 
                 # 检查是否处于暂停状态
@@ -507,7 +510,7 @@ class AudioPlayer:
                     continue
                 
                 if is_stopped:
-                    self._publish_log("WARN", "播放被手动停止", indent=1)
+                    log_warn("PLAY", "播放被手动停止", indent=1)
                     break
                 
                 # 如果不在播放且不是暂停状态，说明播放完成
@@ -532,6 +535,9 @@ class AudioPlayer:
                             current_sentence_position = min(position, len(current_sentence_text))
                         
                         # 创建并发送播放进度事件
+                        # 延迟导入以避免循环导入
+                        from voice_chatbot.dialogue.events import EventType, create_event
+                        
                         event_data = {
                             "elapsed_time": progress.get("elapsed_time", 0.0),
                             "total_duration": progress.get("total_duration"),
@@ -553,12 +559,12 @@ class AudioPlayer:
                             played_text = current_sentence_text[:current_sentence_position]
                             if played_text and played_text != self._last_logged_text:
                                 # 使用inline=True在同一行更新
-                                self._publish_log("INFO", f"[播放文本] {played_text}", indent=1)
+                                log_info("PLAY", f"[播放文本] {played_text}", indent=1, inline=True)
                                 self._last_logged_text = played_text
                         
                         last_status_update_time = current_time
                     except Exception as e:
-                        self._publish_log("DEBUG", f"发送播放进度事件失败: {e}", indent=2)
+                        log_debug("PLAY", f"发送播放进度事件失败: {e}", indent=2)
                 
                 time.sleep(self.check_interval)
             
@@ -602,22 +608,22 @@ class AudioPlayer:
             
             play_elapsed = time.time() - play_start_time
             if was_interrupted:
-                self._publish_log("WARN", f"播放中断 [耗时: {play_elapsed*1000:.1f}ms, 原因: {interrupt_reason.value}]", indent=1)
+                log_warn("PLAY", f"播放中断 [耗时: {play_elapsed*1000:.1f}ms, 原因: {interrupt_reason.value}]", indent=1)
             else:
-                self._publish_log("DEBUG", f"播放完成 [耗时: {play_elapsed*1000:.1f}ms]", indent=1)
+                log_debug("PLAY", f"播放完成 [耗时: {play_elapsed*1000:.1f}ms]", indent=1)
             
             # 调用回调函数
             if on_complete_callback:
                 try:
                     on_complete_callback(was_interrupted, interrupt_reason)
                 except Exception as e:
-                    self._publish_log("ERROR", f"播放完成回调错误: {e}", indent=1)
+                    log_error("PLAY", f"播放完成回调错误: {e}", indent=1)
             
             return not was_interrupted
             
         except Exception as e:
             play_elapsed = time.time() - play_start_time
-            self._publish_log("ERROR", f"播放音频错误: {e} [耗时: {play_elapsed*1000:.1f}ms]", indent=1)
+            log_error("PLAY", f"播放音频错误: {e} [耗时: {play_elapsed*1000:.1f}ms]", indent=1)
             
             # 更新状态
             with self._state_lock:
@@ -632,7 +638,7 @@ class AudioPlayer:
                 try:
                     on_complete_callback(True, None)
                 except Exception as e:
-                    self._publish_log("ERROR", f"播放完成回调错误: {e}", indent=1)
+                    log_error("PLAY", f"播放完成回调错误: {e}", indent=1)
             
             return False
     
@@ -645,46 +651,4 @@ class AudioPlayer:
         """
         # 预留接口，可以后续实现音频波形数据提取
         return None
-    
-    def _publish_log(self, level: str, message: str, indent: int = 0):
-        """
-        通过事件系统发布日志
-        
-        Args:
-            level: 日志级别（INFO, WARN, ERROR, DEBUG）
-            message: 日志消息
-            indent: 缩进级别
-        """
-        if self.event_bus:
-            level_upper = level.upper()
-            if level_upper == "DEBUG":
-                event_type = EventType.LOG_DEBUG
-            elif level_upper == "WARN":
-                event_type = EventType.LOG_WARN
-            elif level_upper == "ERROR":
-                event_type = EventType.LOG_ERROR
-            else:
-                event_type = EventType.LOG_INFO
-            
-            event = create_event(
-                event_type=event_type,
-                data={
-                    "message": message,
-                    "category": "PLAY",
-                    "indent": indent,
-                },
-                source="PLAY"
-            )
-            self.event_bus.publish(event)
-        else:
-            # 回退到直接日志输出
-            level_upper = level.upper()
-            if level_upper == "DEBUG":
-                log_debug("PLAY", message, indent=indent)
-            elif level_upper == "WARN":
-                log_warn("PLAY", message, indent=indent)
-            elif level_upper == "ERROR":
-                log_error("PLAY", message, indent=indent)
-            else:
-                log_info("PLAY", message, indent=indent)
 

@@ -22,14 +22,16 @@ if sys.platform == "win32":
 class PerformanceTimer:
     """性能计时器类 - 用于记录和统计响应耗时"""
     
-    def __init__(self, enable_output=True):
+    def __init__(self, enable_output=True, show_details=True):
         """
         初始化性能计时器
         
         Args:
             enable_output: 是否启用性能统计输出
+            show_details: 是否显示详细阶段信息（True=显示各阶段详情，False=只显示总耗时）
         """
         self.enable_output = enable_output
+        self.show_details = show_details
         self.vad_speech_last_end_time = 0
         self.asr_recognition_last_end_time = 0  # ASR识别完成的时间点
         self.reset()
@@ -341,6 +343,14 @@ class PerformanceTimer:
             print(f"{red_start}[响应耗时详细分析]{reset}")
             print(f"{red_start}{'='*80}{reset}")
             print(f"{yellow_start}总响应耗时: {total_latency*1000:.1f}ms ({start_time_label} → 机器人说出第一个字){reset}")
+            
+            # 如果不显示详细信息，只输出总耗时
+            if not self.show_details:
+                print(f"{red_start}{'='*80}{reset}\n")
+                self.reset()
+                return
+            
+            # 显示详细信息（事件时间戳和各阶段详情）
             print(f"{yellow_start}  起始事件:  {format_timestamp(start_time)} - {start_time_label}{reset}")
             print(f"{yellow_start}  结束事件:  {format_timestamp(self.first_audio_play_time)} - 机器人说出第一个字{reset}\n")
             

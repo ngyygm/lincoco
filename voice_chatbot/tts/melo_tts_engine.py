@@ -165,7 +165,7 @@ class MeloTTSEngine:
             # 获取voice_chatbot目录的父目录作为项目根目录
             import voice_chatbot
             project_root = Path(voice_chatbot.__file__).parent.parent
-            tts_file_cache_dir = project_root / "voice_chatbot" / tts_file_cache_dir
+            tts_file_cache_dir = project_root / tts_file_cache_dir
         
         self._file_cache = TTSFileCache(
             cache_dir=str(tts_file_cache_dir),

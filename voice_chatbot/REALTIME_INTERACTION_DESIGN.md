@@ -83,12 +83,12 @@
 
 **ASR打断能力:**
 - ASR识别到新内容时,可以打断LLM+TTS进程
-- 识别到"真实内容"(不在invalid_recognition_words中)才触发打断
+  - 识别到"真实内容"(不在asr.invalid_recognition_words中)才触发打断
 
 **ASR唤醒机制:**
 - ASR每次输出结果后,更新`last_asr_update_time`
 - ASR监控线程每隔0.1秒检查:
-  - 如果距离上次更新超过`no_speech_threshold`(0.8秒)
+  - 如果距离上次更新超过`asr.no_speech_threshold`(0.8秒)
   - 则唤醒LLM+TTS进程
 
 ---
@@ -182,7 +182,7 @@ def _prepare_user_input_with_time_range(context):
 ```python
 # 在 _on_asr_partial_result() 中实现
 new_text = event_data.get("new_text", "")
-is_real_content = new_text.strip() not in [w.strip() for w in invalid_recognition_words]
+is_real_content = new_text.strip() not in [w.strip() for w in asr.invalid_recognition_words]
 
 if not is_real_content:
     log_debug("ASR识别到无效内容,忽略打断")
@@ -251,9 +251,9 @@ def asr_monitor_thread():
                 # 计算距离上次ASR更新的时间
                 with asr_monitor_lock:
                     time_since_last_update = time.time() - last_asr_update_time
-                
-                # 如果距离上次更新超过no_speech_threshold,且text_end_time已设置
-                if (time_since_last_update > no_speech_threshold and
+
+                # 如果距离上次更新超过asr.no_speech_threshold,且text_end_time已设置
+                if (time_since_last_update > asr.no_speech_threshold and
                     context.text_end_time > 0):
                     # 检查是否需要唤醒LLM+TTS
                     _check_and_wakeup_llm(current_context)
@@ -277,7 +277,7 @@ def _check_and_wakeup_llm(context):
         # 准备用户输入
         user_input = _prepare_user_input_with_time_range(context)
         if user_input:
-            log_info(f"ASR超时({no_speech_threshold}秒),唤醒LLM+TTS,时间范围[{context.text_start_time:.3f}, {context.text_end_time:.3f}]")
+            log_info(f"ASR超时({asr.no_speech_threshold}秒),唤醒LLM+TTS,时间范围[{context.text_start_time:.3f}, {context.text_end_time:.3f}]")
             # 调用_process_user_input处理
             _process_user_input(user_input, is_merge=False)
         else:
@@ -372,11 +372,8 @@ voice_chatbot/
 ```python
 {
   "dialogue": {
-    "no_speech_threshold": 0.8,              # 无语音阈值(秒),用户停止说话后等待多久认为结束
     "min_play_duration_to_record": 1.3,     # 最小播放时长阈值(秒),低于此值不记录历史
     "audio_stop_delay": 0.5,                # 延迟验证时间(秒),VAD打断时的延迟验证
-    "invalid_recognition_words": ["", "i", "嗯", "啊", "呃", "哦", "额"],  # 无效识别词
-    "interrupt_check_interval": 0.1,        # 打断检测间隔(秒)
     "min_silent_duration": 0.8,             # 最小静音时长(秒),延迟验证期间静音检测
     "vad_start_time_offset": 0.5,           # VAD开始时间偏移(秒)
     "asr_output_time_offset": 0.5,          # ASR输出时间偏移(秒)
@@ -394,6 +391,8 @@ voice_chatbot/
     "result_time_buffer": 0.5,              # 结果时间缓冲(秒),时间段提取时的扩展
     "result_timeout": 30.0,                 # ASR结果等待超时(秒)
     "max_result_age": 60.0,                 # 结果最大保留时间(秒)
+    "no_speech_threshold": 0.8,            # 无语音阈值(秒),用户停止说话后等待多久才认为说话结束并触发ASR停止
+    "invalid_recognition_words": ["", "i", "嗯", "啊", "呃", "哦", "额"],  # 无效识别词列表,会被过滤
   }
 }
 ```
@@ -486,7 +485,7 @@ voice_chatbot/
 
 1. **时间范围控制**: 通过text_start_time和text_end_time精确控制传入LLM的文本内容
 2. **双重打断机制**: VAD和ASR都可以打断LLM+TTS进程,提供更灵活的交互
-3. **智能唤醒**: ASR监控线程基于no_speech_threshold自动唤醒LLM+TTS
+3. **智能唤醒**: ASR监控线程基于asr.no_speech_threshold自动唤醒LLM+TTS
 4. **分阶段打断**: 根据播放时长区分"什么都没说"和"已经说了"两个阶段,分别处理
 5. **上下文管理**: 使用TaskContext隔离每个任务,确保任务间互不干扰
 

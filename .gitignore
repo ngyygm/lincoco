@@ -55,6 +55,24 @@ voice_chatbot/tts_cache/**/*.ogg
 !voice_chatbot/tts/tts_cache/**/_index.json
 !voice_chatbot/tts_cache/**/_index.json
 
+# Cache directories - 所有缓存文件（但保留索引和目录结构）
+cache/**/*.mp3
+cache/**/*.wav
+cache/**/*.flac
+cache/**/*.aac
+cache/**/*.ogg
+!cache/**/_index.json
+!cache/speaker_verification_audio/
+
+# Pretrained models - 不提交预训练模型
+pretrained/
+pretrained/**/*.bin
+pretrained/**/*.pt
+pretrained/**/*.pth
+pretrained/**/*.ckpt
+pretrained/**/*.onnx
+pretrained/**/*.safetensors
+
 # Environment variables
 .env
 .env.local

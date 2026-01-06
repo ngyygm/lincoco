@@ -24,6 +24,14 @@ except ImportError:
 from voice_chatbot.utils import log_info, log_warn, log_error, log_debug
 from voice_chatbot.dialogue.events import EventType, EventBus, create_event
 
+# 尝试导入声纹验证模块
+try:
+    from voice_chatbot.asr.speaker_verification import SpeakerVerification
+    HAS_SPEAKER_VERIFICATION = True
+except ImportError:
+    HAS_SPEAKER_VERIFICATION = False
+    SpeakerVerification = None
+
 
 class CircularAudioBuffer:
     """环形音频缓冲区 - 用于预缓存VAD检测前的音频"""
@@ -220,7 +228,7 @@ class FunASRStream:
         self.chunk_size = config.get("asr.chunk_size", [0, 10, 5])
         self.encoder_chunk_look_back = config.get("asr.encoder_chunk_look_back", 4)
         self.decoder_chunk_look_back = config.get("asr.decoder_chunk_look_back", 1)
-        self.pre_buffer_seconds = config.get("asr.pre_buffer_seconds", 0.5)
+        self.pre_buffer_seconds = config.get("asr.pre_buffer_seconds", 1)
         self.language = config.get("asr.language", "zh")  # 默认中文
         self.enable_deduplication = config.get("asr.enable_deduplication", True)  # 是否启用去重
         # 注意：ASR不再使用no_speech_threshold，完全依赖VAD的speaking标志来决定何时结束识别
@@ -268,19 +276,38 @@ class FunASRStream:
         # 模型加载标志
         self.model_loaded = False
         
+        # 初始化声纹验证器（如果启用）
+        self.speaker_verification = None
+        if HAS_SPEAKER_VERIFICATION:
+            try:
+                # 先创建SpeakerVerification（传入asr_model=None，会在模型加载后设置）
+                self.speaker_verification = SpeakerVerification(config, asr_model=None)
+            except Exception as e:
+                log_warn("ASR", f"声纹验证器初始化失败: {e}，将禁用声纹锁功能")
+                self.speaker_verification = None
+        
+        # 声纹验证相关状态
+        self.speaker_verified = False  # 当前识别任务是否已通过声纹验证
+        self.min_verification_length = config.get("asr.speaker_verification.min_audio_length", 1.0) * self.sample_rate  # 最小验证音频长度（采样点数）
+        
+        # 滑动窗口声纹验证参数
+        self.sv_sliding_window_enabled = config.get("asr.speaker_verification.sliding_window.enabled", True)
+        self.sv_window_length = config.get("asr.speaker_verification.sliding_window.window_length", 1.0)
+        self.sv_window_stride = config.get("asr.speaker_verification.sliding_window.window_stride", 0.5)
+        
         # 预加载模型（如果配置启用）
         self.preload_model = config.get("asr.preload_model", True)
         if self.preload_model:
-            self._publish_log("DEBUG", "开始预加载ASR模型...")
+            log_debug("ASR", "开始预加载ASR模型...")
             try:
                 if self._load_model():
-                    self._publish_log("DEBUG", "ASR模型预加载完成")
+                    log_debug("ASR", "ASR模型预加载完成")
                 else:
-                    self._publish_log("WARN", "ASR模型预加载失败，将在首次使用时重试")
+                    log_warn("ASR", "ASR模型预加载失败，将在首次使用时重试")
             except Exception as e:
-                self._publish_log("WARN", f"ASR模型预加载出错: {e}，将在首次使用时重试")
+                log_warn("ASR", f"ASR模型预加载出错: {e}，将在首次使用时重试")
         
-        self._publish_log("DEBUG", "FunASR流式识别器初始化完成")
+        log_debug("ASR", "FunASR流式识别器初始化完成")
     
     def _load_model(self) -> bool:
         """
@@ -293,7 +320,7 @@ class FunASRStream:
             return True
         
         if not HAS_FUNASR:
-            self._publish_log("ERROR", "FunASR库未安装，无法加载模型")
+            log_error("ASR", "FunASR库未安装，无法加载模型")
             return False
         
         max_retries = 2  # 最多重试2次
@@ -302,35 +329,41 @@ class FunASRStream:
         for retry_count in range(max_retries):
             try:
                 if self.model_path:
-                    self._publish_log("DEBUG", f"正在加载流式ASR模型: {self.model_path} [尝试 {retry_count + 1}/{max_retries}]")
+                    log_debug("ASR", f"正在加载流式ASR模型: {self.model_path} [尝试 {retry_count + 1}/{max_retries}]")
                     try:
-                        self.asr_model = AutoModel(model=self.model_path, device="cuda")
+                        self.asr_model = AutoModel(model=self.model_path, device="cuda", disable_pbar=True)
                     except Exception as e:
                         # 如果CUDA失败，尝试使用CPU
-                        self._publish_log("WARN", f"CUDA加载失败，尝试使用CPU: {e}", indent=1)
-                        self.asr_model = AutoModel(model=self.model_path, device="cpu")
+                        log_warn("ASR", f"CUDA加载失败，尝试使用CPU: {e}", indent=1)
+                        self.asr_model = AutoModel(model=self.model_path, device="cpu", disable_pbar=True)
                 else:
-                    self._publish_log("WARN", "模型路径未配置，尝试使用默认模型")
+                    log_warn("ASR", "模型路径未配置，尝试使用默认模型")
                     try:
                         # 尝试使用默认模型（可能需要网络下载）
-                        self.asr_model = AutoModel(model="paraformer-zh-streaming", device="cuda")
+                        self.asr_model = AutoModel(model="paraformer-zh-streaming", device="cuda", disable_pbar=True)
                     except Exception as e:
                         # 如果CUDA失败，尝试使用CPU
-                        self._publish_log("WARN", f"CUDA加载失败，尝试使用CPU: {e}", indent=1)
-                        self.asr_model = AutoModel(model="paraformer-zh-streaming", device="cpu")
+                        log_warn("ASR", f"CUDA加载失败，尝试使用CPU: {e}", indent=1)
+                        self.asr_model = AutoModel(model="paraformer-zh-streaming", device="cpu", disable_pbar=True)
                 
                 self.model_loaded = True
-                self._publish_log("DEBUG", "流式ASR模型加载完成")
+                log_debug("ASR", "流式ASR模型加载完成")
+                
+                # 将ASR模型传递给声纹验证器（如果存在）
+                if self.speaker_verification is not None:
+                    self.speaker_verification.asr_model = self.asr_model
+                    log_debug("ASR", "已将ASR模型传递给声纹验证器", indent=1)
+                
                 return True
             except Exception as e:
                 last_error = e
-                self._publish_log("ERROR", f"模型加载失败（尝试 {retry_count + 1}/{max_retries}）: {e}")
+                log_error("ASR", f"模型加载失败（尝试 {retry_count + 1}/{max_retries}）: {e}")
                 if retry_count < max_retries - 1:
                     import time
                     time.sleep(1.0)  # 等待1秒后重试
                     continue
                 else:
-                    self._publish_log("ERROR", "模型加载失败，已达到最大重试次数")
+                    log_error("ASR", "模型加载失败，已达到最大重试次数")
                     break
         
         return False
@@ -344,20 +377,20 @@ class FunASRStream:
         """
         with self.state_lock:
             if self.recognizing:
-                self._publish_log("WARN", "已经在识别中，不重复启动")
+                log_warn("ASR", "已经在识别中，不重复启动")
                 return False
 
             # 记录ASR开始时间
             import time
             start_time = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
-            self._publish_log("INFO", f"ASR识别开始 - 时间: {start_time}")
-            self._publish_log("DEBUG", f"任务ID: {self.current_task_id}, 初始speaking状态: True（等待VAD）", indent=1)
+            log_debug("ASR", f"ASR识别开始 - 时间: {start_time}")
+            log_debug("ASR", f"任务ID: {self.current_task_id}, 初始speaking状态: True（等待VAD）", indent=1)
 
             # 检查模型是否已加载（如果已加载，直接使用，不再调用_load_model）
             if not self.model_loaded or self.asr_model is None:
                 # 加载模型（如果未加载）
                 if not self._load_model():
-                    self._publish_log("ERROR", "模型加载失败，无法启动识别")
+                    log_error("ASR", "模型加载失败，无法启动识别")
                     return False
 
             # 清空队列和状态
@@ -371,6 +404,10 @@ class FunASRStream:
             self.final_result = ""
             self.partial_result = ""
             self._reset_text_accumulator()
+            
+            # 重置声纹验证状态
+            self.speaker_verified = False
+            
             self.recognizing = True
             self.speaking = True
 
@@ -392,9 +429,9 @@ class FunASRStream:
                     )
                     self.event_bus.publish(event)
                 except Exception as e:
-                    self._publish_log("ERROR", f"发送ASR_RECOGNITION_START事件错误: {e}", indent=1)
+                    log_error("ASR", f"发送ASR_RECOGNITION_START事件错误: {e}", indent=1)
 
-            self._publish_log("DEBUG", "启动流式识别")
+            log_debug("ASR", "启动流式识别")
             return True
     
     def stop_recognition(self):
@@ -406,11 +443,11 @@ class FunASRStream:
             # 记录停止识别的时间和原因
             import time
             stop_time = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
-            self._publish_log("DEBUG", f"ASR停止识别调用 - 时间: {stop_time}, 原因: 外部调用stop_recognition()", indent=1)
-            self._publish_log("DEBUG", f"调用前speaking={self.speaking}, recognizing={self.recognizing}, 部分结果: {self.partial_result}", indent=1)
+            log_debug("ASR", f"ASR停止识别调用 - 时间: {stop_time}, 原因: 外部调用stop_recognition()", indent=1)
+            log_debug("ASR", f"调用前speaking={self.speaking}, recognizing={self.recognizing}, 部分结果: {self.partial_result}", indent=1)
 
             self.speaking = False
-            self._publish_log("DEBUG", f"设置speaking=False，识别线程将退出主循环", indent=1)
+            log_debug("ASR", f"设置speaking=False，识别线程将退出主循环", indent=1)
     
     def feed_audio(self, audio_data: np.ndarray):
         """
@@ -422,10 +459,13 @@ class FunASRStream:
         if not self.recognizing:
             return
         
+        # 如果启用了声纹锁，需要先通过验证才能进行识别
+        # 验证在识别线程中进行，这里只需要将音频送入队列
+        # 识别线程会在开始时进行验证
         try:
             self.audio_queue.put(audio_data, timeout=0.1)
         except queue.Full:
-            self._publish_log("WARN", "音频队列已满，丢弃音频数据", indent=1)
+            log_warn("ASR", "音频队列已满，丢弃音频数据", indent=1)
     
     def wait_for_result(self, timeout: Optional[float] = None) -> str:
         """
@@ -535,7 +575,7 @@ class FunASRStream:
         """流式ASR识别线程函数"""
         import time
         thread_start_time = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
-        self._publish_log("DEBUG", f"识别线程启动 - 时间: {thread_start_time}, 线程ID: {threading.get_ident()}, 初始状态: recognizing={self.recognizing}, speaking={self.speaking}")
+        log_debug("ASR", f"识别线程启动 - 时间: {thread_start_time}, 线程ID: {threading.get_ident()}, 初始状态: recognizing={self.recognizing}, speaking={self.speaking}")
 
         try:
             buffer = np.array([], dtype=np.float32)
@@ -543,8 +583,89 @@ class FunASRStream:
             # 首先处理预缓存的音频（VAD检测前的音频）
             pre_audio = self.pre_buffer.get_all()
             if len(pre_audio) > 0:
-                self._publish_log("DEBUG", f"加载预缓存音频: {len(pre_audio)/self.sample_rate:.2f}秒 ({len(pre_audio)}采样点)", indent=1)
+                log_debug("ASR", f"加载预缓存音频: {len(pre_audio)/self.sample_rate:.2f}秒 ({len(pre_audio)}采样点)", indent=1)
                 buffer = np.concatenate([buffer, pre_audio])
+            
+            # 如果启用了声纹锁且尚未验证，使用滑动窗口进行声纹验证
+            if self.speaker_verification and self.speaker_verification.is_enabled() and not self.speaker_verified:
+                # 从配置读取滑动窗口参数
+                window_length = self.sv_window_length if self.sv_sliding_window_enabled else self.min_verification_length / self.sample_rate
+                window_stride = self.sv_window_stride if self.sv_sliding_window_enabled else 0
+                window_samples = int(window_length * self.sample_rate)
+                stride_samples = int(window_stride * self.sample_rate)
+                
+                log_debug("ASR", f"启用声纹 {'滑动窗口' if self.sv_sliding_window_enabled else '固定窗口'}验证 - 窗口长度: {window_length}秒" + 
+                          (f", 滑动步长: {window_stride}秒" if self.sv_sliding_window_enabled else ""))
+                
+                verification_complete = False
+                
+                # 声纹验证循环
+                while not verification_complete:
+                    # 检查VAD状态，如果用户停止说话则退出验证循环
+                    with self.state_lock:
+                        if not self.speaking:
+                            log_debug("ASR", "用户停止说话，结束声纹验证")
+                            break
+                    
+                    # 尝试获取更多音频
+                    try:
+                        audio_chunk = self.audio_queue.get(timeout=0.1)
+                        buffer = np.concatenate([buffer, audio_chunk])
+                    except queue.Empty:
+                        continue
+                    
+                    # 当缓冲区有足够的音频时进行验证
+                    while len(buffer) >= window_samples:
+                        # 取窗口长度的音频进行验证
+                        window_audio = buffer[-window_samples:]
+                        
+                        # 进行声纹验证
+                        is_match, similarity = self.speaker_verification.verify(window_audio, self.sample_rate)
+                        
+                        if is_match:
+                            # 验证通过
+                            self.speaker_verified = True
+                            verification_complete = True
+                            log_debug("ASR", f"声纹验证通过，相似度: {similarity:.4f}")
+                            
+                            # 保留验证通过的窗口开始的所有音频用于ASR识别
+                            # 注意：验证通过的窗口音频也要用于ASR，所以不能丢弃
+                            # buffer 保持当前状态，继续处理
+                            break
+                        else:
+                            # 验证失败
+                            log_debug("ASR", f"声纹验证未通过，相似度: {similarity:.4f}")
+                            
+                            if self.sv_sliding_window_enabled:
+                                # 滑动窗口模式：向后滑动
+                                buffer = buffer[-stride_samples:]
+                                
+                                # 滑动后检查剩余音频是否足够
+                                if len(buffer) < window_samples:
+                                    break
+                            else:
+                                # 固定窗口模式：只验证一次，失败则退出
+                                break
+                    
+                    # 如果验证完成，退出循环
+                    if verification_complete:
+                        break
+                
+                # 声纹验证循环结束
+                if self.speaker_verified:
+                    log_debug("ASR", "声纹验证通过，继续ASR识别")
+                else:
+                    # 声纹验证未通过，停止本次识别
+                    log_debug("ASR", "声纹验证未通过，停止本次ASR识别")
+                    
+                    # 重置识别状态
+                    with self.state_lock:
+                        self.recognizing = False
+                        self.speaking = False
+                        self.partial_result = ""
+                        self._reset_text_accumulator()
+                    
+                    return  # 直接退出识别线程，不进行ASR识别
 
             chunk_count = 0
             last_text_length = 0  # 记录上一次文本长度，用于检测是否有新文本
@@ -565,7 +686,7 @@ class FunASRStream:
                                 import time
                                 end_time = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
                                 current_text = self.partial_result
-                                self._publish_log("DEBUG", f"ASR结束判定 - 时间: {end_time}, 原因: VAD判定speaking=False（用户停止说话）, 已处理{chunk_count}个chunk, 当前文本: {current_text}, 缓冲区剩余: {len(buffer)}采样点", indent=1)
+                                log_debug("ASR", f"ASR结束判定 - 时间: {end_time}, 原因: VAD判定speaking=False（用户停止说话）, 已处理{chunk_count}个chunk, 当前文本: {current_text}, 缓冲区剩余: {len(buffer)}采样点", indent=1)
                                 # 语音已结束，处理剩余音频
                                 break
                         continue
@@ -611,9 +732,9 @@ class FunASRStream:
                                             else:
                                                 self.on_partial_result(full_text)
                                         except Exception as e:
-                                            self._publish_log("ERROR", f"部分结果回调函数错误: {e}", indent=2)
+                                            log_error("ASR", f"部分结果回调函数错误: {e}", indent=2)
                                     
-                                    self._publish_log("DEBUG", f"部分结果: {full_text}", indent=2)
+                                    log_debug("ASR", f"部分结果: {full_text}", indent=2)
                                     
                                     # 发送ASR部分结果事件（用于实时日志输出）
                                     if self.event_bus:
@@ -629,18 +750,18 @@ class FunASRStream:
                                             )
                                             self.event_bus.publish(partial_event)
                                         except Exception as e:
-                                            self._publish_log("ERROR", f"发送ASR_PARTIAL_RESULT事件错误: {e}", indent=2)
+                                            log_error("ASR", f"发送ASR_PARTIAL_RESULT事件错误: {e}", indent=2)
                                     
                         except Exception as e:
-                            self._publish_log("ERROR", f"识别错误: {e}", indent=1)
+                            log_error("ASR", f"识别错误: {e}", indent=1)
                             
                 except Exception as e:
-                    self._publish_log("ERROR", f"线程错误: {e}")
+                    log_error("ASR", f"线程错误: {e}")
                     break
             
             # 处理最后剩余的音频
             if len(buffer) > 0:
-                self._publish_log("DEBUG", f"处理剩余音频: {len(buffer)} 采样点", indent=1)
+                log_debug("ASR", f"处理剩余音频: {len(buffer)} 采样点", indent=1)
                 
                 # 用静音补齐到完整的chunk大小
                 padding_size = self.asr_chunk_stride - len(buffer)
@@ -686,7 +807,7 @@ class FunASRStream:
                                 else:
                                     self.on_final_result(self.final_result)
                             except Exception as e:
-                                self._publish_log("ERROR", f"最终结果回调函数错误: {e}", indent=1)
+                                log_error("ASR", f"最终结果回调函数错误: {e}", indent=1)
                     else:
                         self.final_result = self._get_accumulated_text()
                         
@@ -698,10 +819,10 @@ class FunASRStream:
                             try:
                                 self.on_final_result(self.final_result, None)
                             except Exception as e:
-                                self._publish_log("ERROR", f"最终结果回调函数错误: {e}", indent=1)
+                                log_error("ASR", f"最终结果回调函数错误: {e}", indent=1)
                         
                 except Exception as e:
-                    self._publish_log("ERROR", f"最终识别错误: {e}", indent=1)
+                    log_error("ASR", f"最终识别错误: {e}", indent=1)
                     self.final_result = self._get_accumulated_text()
                     
                     # 发送ASR最终结果事件
@@ -712,7 +833,7 @@ class FunASRStream:
                         try:
                             self.on_final_result(self.final_result, None)
                         except Exception as e:
-                            self._publish_log("ERROR", f"最终结果回调函数错误: {e}", indent=1)
+                            log_error("ASR", f"最终结果回调函数错误: {e}", indent=1)
                     else:
                         # 没有剩余音频，使用空数组进行最终识别以获取缓存中的内容
                         try:
@@ -751,7 +872,7 @@ class FunASRStream:
                                     else:
                                         self.on_final_result(self.final_result)
                                 except Exception as e:
-                                    self._publish_log("ERROR", f"最终结果回调函数错误: {e}", indent=1)
+                                    log_error("ASR", f"最终结果回调函数错误: {e}", indent=1)
                             
                         except Exception as e:
                             self.final_result = self._get_accumulated_text()
@@ -767,17 +888,17 @@ class FunASRStream:
                                     else:
                                         self.on_final_result(self.final_result)
                                 except Exception as e:
-                                    self._publish_log("ERROR", f"最终结果回调函数错误: {e}", indent=1)
+                                    log_error("ASR", f"最终结果回调函数错误: {e}", indent=1)
             
             # 输出最终结果
             import time
             final_time = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
-            self._publish_log("INFO", f"ASR识别完成 - 时间: {final_time}, 最终文本: {self.final_result}, 长度: {len(self.final_result)}字符")
-            self._publish_log("DEBUG", f"共处理 {chunk_count} 个chunk, chunk_size={self.chunk_size}, encoder_chunk_look_back={self.encoder_chunk_look_back}, decoder_chunk_look_back={self.decoder_chunk_look_back}", indent=1)
+            log_debug("ASR", f"ASR识别完成 - 时间: {final_time}, 最终文本 {len(self.final_result)}字符: {self.final_result}")
+            log_debug("ASR", f"共处理 {chunk_count} 个chunk, chunk_size={self.chunk_size}, encoder_chunk_look_back={self.encoder_chunk_look_back}, decoder_chunk_look_back={self.decoder_chunk_look_back}", indent=1)
         except Exception as e:
-            self._publish_log("ERROR", f"识别线程发生未捕获的异常: {e}")
+            log_error("ASR", f"识别线程发生未捕获的异常: {e}")
             import traceback
-            self._publish_log("ERROR", f"异常堆栈: {traceback.format_exc()}", indent=1)
+            log_error("ASR", f"异常堆栈: {traceback.format_exc()}", indent=1)
         finally:
             # 确保重置ASR状态，即使发生异常也要重置
             with self.state_lock:
@@ -785,7 +906,7 @@ class FunASRStream:
                 self.speaking = False
                 self.asr_cache = {}
             
-            self._publish_log("DEBUG", "识别线程结束")
+            log_debug("ASR", "识别线程结束")
     
     def _send_final_result_events(self, text: str, confidence: Optional[float]):
         """
@@ -820,51 +941,6 @@ class FunASRStream:
             )
             self.event_bus.publish(end_event)
         except Exception as e:
-            self._publish_log("ERROR", f"发送ASR事件错误: {e}", indent=1)
+            log_error("ASR", f"发送ASR事件错误: {e}", indent=1)
     
-    def _publish_log(self, level: str, message: str, indent: int = 0):
-        """
-        通过事件系统发布日志
-
-        Args:
-            level: 日志级别（INFO, WARN, ERROR, DEBUG）
-            message: 日志消息
-            indent: 缩进级别
-        """
-        # 直接输出日志（确保一定显示）
-        level_upper = level.upper()
-        if level_upper == "DEBUG":
-            log_debug("ASR", message, indent=indent)
-        elif level_upper == "WARN":
-            log_warn("ASR", message, indent=indent)
-        elif level_upper == "ERROR":
-            log_error("ASR", message, indent=indent)
-        else:
-            log_info("ASR", message, indent=indent)
-
-        # 同时也通过事件系统发布（如果event_bus可用）
-        if self.event_bus:
-            try:
-                if level_upper == "DEBUG":
-                    event_type = EventType.LOG_DEBUG
-                elif level_upper == "WARN":
-                    event_type = EventType.LOG_WARN
-                elif level_upper == "ERROR":
-                    event_type = EventType.LOG_ERROR
-                else:
-                    event_type = EventType.LOG_INFO
-
-                event = create_event(
-                    event_type=event_type,
-                    data={
-                        "message": message,
-                        "category": "ASR",
-                        "indent": indent,
-                    },
-                    source="ASR"
-                )
-                self.event_bus.publish(event)
-            except Exception as e:
-                # 事件发布失败，已经通过直接日志输出了，忽略异常
-                pass
-
+    
