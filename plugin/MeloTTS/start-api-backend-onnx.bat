@@ -11,13 +11,9 @@ REM Activate voice environment
 CALL %CONDA_PATH%\Scripts\activate.bat %CONDA_PATH%
 call conda activate voice
 
-start http://127.0.0.1:8101/docs
+start http://127.0.0.1:8102/docs
 
-python api.py
+python api_onnx.py
 
 cmd /k
-
-
-
-
 

@@ -173,7 +173,7 @@ def start_melo_tts_api(config: Config):
         log_info("MAIN", f"正在启动 MeloTTS API 服务 (端口 {port})...", indent=0)
         
         # 获取 MeloTTS 目录路径
-        melotts_dir = project_root / "MeloTTS"
+        melotts_dir = project_root / "plugin" / "MeloTTS"
         if not melotts_dir.exists():
             log_error("MAIN", f"MeloTTS 目录不存在: {melotts_dir}", indent=1)
             return None

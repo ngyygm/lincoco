@@ -118,46 +118,47 @@ lincoco/
 ├── requirements.txt                 # Python 依赖包
 ├── README.md                        # 项目说明文档
 │
-├── 3D-Speaker/                     # 3D-Speaker 声纹识别模块（完整集成）
-│   ├── speakerlab/                 # 声纹识别核心库
-│   │   ├── models/                 # 模型定义（22个模型文件）
-│   │   ├── process/                # 处理脚本
-│   │   └── utils/                  # 工具函数
-│   └── README.md                   # 3D-Speaker 官方文档
-│
-├── CosyVoice/                      # CosyVoice 语音合成模块（完整集成）
-│   ├── cosyvoice/                  # CosyVoice 核心库
-│   │   ├── bin/                    # 可执行脚本
-│   │   ├── cli/                    # 命令行工具
-│   │   ├── flow/                   # Flow 模型
-│   │   ├── hifigan/                # HiFi-GAN 模型
-│   │   ├── llm/                    # LLM 组件
-│   │   ├── transformer/            # Transformer 模型
-│   │   ├── tokenizer/              # 分词器
-│   │   ├── utils/                  # 工具函数
-│   │   └── dataset/                # 数据集处理
-│   ├── api.py                      # API 服务
-│   ├── webui.py                    # WebUI 界面
-│   ├── examples/                   # 示例脚本
-│   ├── third_party/                # 第三方依赖
-│   └── README.md                   # CosyVoice 官方文档
-│
-├── MeloTTS/                        # MeloTTS 语音合成模块（完整集成）
-│   ├── melo/                       # MeloTTS 核心库
-│   │   ├── configs/                # 配置文件
-│   │   ├── data/                   # 数据处理
-│   │   ├── text/                   # 文本处理（43个文件）
-│   │   ├── models/                 # 模型定义
-│   │   └── infer.py                # 推理接口
-│   ├── MeloTTS-ONNX/               # ONNX 优化版本
-│   │   ├── melo_onnx/              # ONNX 核心（45个文件）
-│   │   └── requirements.txt        # ONNX 依赖
-│   ├── api.py                      # HTTP API 服务
-│   ├── api_onnx.py                 # ONNX API 服务
-│   ├── webui.py                    # WebUI 界面
-│   ├── hf_download/                # HuggingFace 缓存（不提交）
-│   ├── docs/                       # 文档
-│   └── README.md                   # MeloTTS 官方文档
+├── plugin/                         # 扩展功能插件目录
+│   ├── 3d-speaker/                 # 3D-Speaker 声纹识别模块（完整集成）
+│   │   ├── speakerlab/             # 声纹识别核心库
+│   │   │   ├── models/             # 模型定义（22个模型文件）
+│   │   │   ├── process/            # 处理脚本
+│   │   │   └── utils/              # 工具函数
+│   │   └── README.md               # 3D-Speaker 官方文档
+│   │
+│   ├── cosyvoice/                  # CosyVoice 语音合成模块（完整集成）
+│   │   ├── cosyvoice/              # CosyVoice 核心库
+│   │   │   ├── bin/                # 可执行脚本
+│   │   │   ├── cli/                # 命令行工具
+│   │   │   ├── flow/               # Flow 模型
+│   │   │   ├── hifigan/            # HiFi-GAN 模型
+│   │   │   ├── llm/                # LLM 组件
+│   │   │   ├── transformer/        # Transformer 模型
+│   │   │   ├── tokenizer/          # 分词器
+│   │   │   ├── utils/              # 工具函数
+│   │   │   └── dataset/            # 数据集处理
+│   │   ├── api.py                  # API 服务
+│   │   ├── webui.py                # WebUI 界面
+│   │   ├── examples/               # 示例脚本
+│   │   ├── third_party/            # 第三方依赖
+│   │   └── README.md               # CosyVoice 官方文档
+│   │
+│   └── melotts/                    # MeloTTS 语音合成模块（完整集成）
+│       ├── melo/                   # MeloTTS 核心库
+│       │   ├── configs/            # 配置文件
+│       │   ├── data/               # 数据处理
+│       │   ├── text/               # 文本处理（43个文件）
+│       │   ├── models/             # 模型定义
+│       │   └── infer.py            # 推理接口
+│       ├── MeloTTS-ONNX/           # ONNX 优化版本
+│       │   ├── melo_onnx/          # ONNX 核心（45个文件）
+│       │   └── requirements.txt    # ONNX 依赖
+│       ├── api.py                  # HTTP API 服务
+│       ├── api_onnx.py             # ONNX API 服务
+│       ├── webui.py                # WebUI 界面
+│       ├── hf_download/            # HuggingFace 缓存（不提交）
+│       ├── docs/                   # 文档
+│       └── README.md               # MeloTTS 官方文档
 │
 ├── voice_chatbot/                  # 核心模块目录
 │   ├── voice_main.py               # 语音机器人主程序

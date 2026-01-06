@@ -16,7 +16,7 @@ from typing import Optional, List, Tuple
 from pathlib import Path
 
 # 添加 3D-Speaker 到路径
-THREE_D_SPEAKER_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "3D-Speaker")
+THREE_D_SPEAKER_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "plugin", "3D-Speaker")
 if os.path.exists(THREE_D_SPEAKER_PATH):
     sys.path.insert(0, THREE_D_SPEAKER_PATH)
 
