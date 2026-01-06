@@ -1,4 +1,4 @@
-# Lincoco Voice Chatbot
+# Lincoco Realtime Voice Chatbot
 
 一个基于语音识别(ASR)、大语言模型(LLM)和语音合成(TTS)的实时语音对话系统，支持自然的人机交互、打断机制、对话历史管理、声纹验证等高级功能。
 
