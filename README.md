@@ -53,11 +53,11 @@
 
 系统采用双系统架构（主系统+副系统），包含9个线程：
 
-- **主线程（线程0）**：系统初始化和状态管理
-- **常驻后台线程（线程1-3）**：音频采集、VAD后台、事件总线处理
-- **按需启动线程（线程4-9）**：ASR识别、LLM+TTS处理、音频播放等
+- **主线程**：系统初始化和状态管理
+- **常驻后台线程**：音频采集、VAD后台、事件总线处理
+- **按需启动线程**：ASR识别、LLM+TTS处理、音频播放等
 
-详细架构说明请参考 [PROJECT_OUTLINE.md](voice_chatbot/PROJECT_OUTLINE.md)。
+详细架构说明请参考 [PROJECT_OUTLINE.md](PROJECT_OUTLINE.md)。
 
 ## 🚀 快速开始
 
@@ -275,7 +275,7 @@ asr.speaker_verification.sliding_window.window_stride = 0.2  # 滑动步长（�
 asr.no_speech_threshold = 0.4     # 无语音阈值（秒）
 ```
 
-详细配置说明请参考 [PROJECT_OUTLINE.md](voice_chatbot/PROJECT_OUTLINE.md#-配置参数)。
+详细配置说明请参考 [PROJECT_OUTLINE.md](PROJECT_OUTLINE.md#-配置参数)。
 
 ## 🎯 主要功能
 
