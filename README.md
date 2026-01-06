@@ -233,14 +233,18 @@ lincoco/
 ### 项目结构变化说明
 
 **新增模块**：
-- `3D-Speaker/`：完整集成的声纹识别模块
-- `CosyVoice/`：完整集成的语音合成模块
-- `MeloTTS/MeloTTS-ONNX/`：完整集成的MeloTTS及其ONNX优化版本
+- `plugin/`：扩展功能插件目录，统一管理所有第三方集成模块
+  - `plugin/3d-speaker/`：完整集成的声纹识别模块
+  - `plugin/cosyvoice/`：完整集成的语音合成模块
+  - `plugin/melotts/`：完整集成的MeloTTS及其ONNX优化版本
 - `cleanup_3d_speaker.py`：清理3D-Speaker模块多余文件的工具
 - `extract_3d_speaker_from_git.py`：从git提取3D-Speaker的工具
 - `prepare_minimal_3d_speaker.py`：准备最小3D-Speaker的工具
 
 **模块重构**：
+- `3D-Speaker/` → `plugin/3d-speaker/`：声纹识别模块移至plugin目录
+- `CosyVoice/` → `plugin/cosyvoice/`：语音合成模块移至plugin目录
+- `MeloTTS/` → `plugin/melotts/`：MeloTTS模块移至plugin目录
 - `voice_chatbot/audio/` → `voice_chatbot/asr/`：ASR相关功能独立成模块
 - `voice_chatbot/audio/microphone.py` → `voice_chatbot/utils/microphone.py`：麦克风采集移入工具模块
 - `voice_chatbot/tts/audio_player.py` → `voice_chatbot/utils/audio_player.py`：音频播放器移入工具模块
@@ -381,8 +385,10 @@ asr.no_speech_threshold = 0.8     # 无语音阈值（秒）
 ## ⚠️ 注意事项
 
 - 项目中的 `tts_cache/` 目录包含大量音频缓存文件，已配置 `.gitignore` 忽略音频文件，但保留 `_index.json` 索引文件
-- `MeloTTS/` 目录是独立的 git 仓库，不会被提交到主仓库（如需使用，请单独克隆或作为子模块添加）
-- `MeloTTS/hf_download/` 目录包含 Hugging Face 模型下载缓存，不会被提交到 Git
+- `plugin/` 目录包含所有扩展功能模块：
+  - `plugin/melotts/` 目录是独立的 git 仓库，不会被提交到主仓库（如需使用，请单独克隆或作为子模块添加）
+  - `plugin/melotts/hf_download/` 目录包含 Hugging Face 模型下载缓存，不会被提交到 Git
+  - 其他插件模块的缓存文件也会被 `.gitignore` 忽略
 - 日志文件保存在 `logs/` 目录，不会被提交到 Git
 - 请确保正确配置环境变量（如 OpenAI API Key）
 - **MeloTTS 自动启动**：如果配置中选择了 MeloTTS 引擎，程序会在启动时自动检测端口占用情况并启动 API 服务，无需手动运行 `start-api-backend.bat`
@@ -394,6 +400,8 @@ asr.no_speech_threshold = 0.8     # 无语音阈值（秒）
 - [FunASR](https://github.com/alibaba-damo-academy/FunASR) - 语音识别框架
 - [Edge TTS](https://github.com/rany2/edge-tts) - 语音合成服务
 - [MeloTTS](https://github.com/myshell-ai/MeloTTS) - 高质量多语言语音合成
+- [CosyVoice](https://github.com/FunAudioLLM/CosyVoice) - 高质量语音合成（阿里达摩院）
+- [3D-Speaker](https://github.com/alibaba-damo-academy/3D-Speaker) - 声纹识别和验证
 - [OpenAI API](https://platform.openai.com/docs) - 大语言模型 API
 
 ---
@@ -414,7 +422,7 @@ asr.no_speech_threshold = 0.8     # 无语音阈值（秒）
   - 嵌入缓存：支持缓存声纹嵌入向量，提高验证速度
   - GPU 加速：支持 CUDA 加速声纹验证
   - 多模型支持：支持 CAMPlus、ERes2Net、ERes2NetV2 等多种模型
-- 📦 **3D-Speaker 集成**：完整集成 3D-Speaker 声纹识别库
+- 📦 **3D-Speaker 集成**：完整集成 3D-Speaker 声纹识别库（位于 `plugin/3d-speaker/`）
   - 模型下载：支持从 ModelScope 自动下载声纹模型
   - 完整的训练脚本：提供 VoxCeleb、CNCeleb 等数据集的训练示例
 - 🎯 **声纹验证流程优化**：优化声纹验证与 ASR 识别的集成流程
@@ -424,7 +432,7 @@ asr.no_speech_threshold = 0.8     # 无语音阈值（秒）
 
 ### TTS 引擎增强
 
-- 🚀 **MeloTTS 引擎**：新增 MeloTTS 语音合成引擎支持
+- 🚀 **MeloTTS 引擎**：新增 MeloTTS 语音合成引擎支持（位于 `plugin/melotts/`）
   - HTTP API 调用：通过 HTTP API 调用 MeloTTS 服务
   - 多语言支持：自动语言检测和说话人选择（中文、英文、日文等）
   - 参数配置：支持语速、SDP 比例、噪声比例等参数配置
@@ -434,7 +442,7 @@ asr.no_speech_threshold = 0.8     # 无语音阈值（秒）
   - 模型预加载：服务启动后自动预加载配置中指定的模型语言
   - 内存优化：API 不再保存临时文件到磁盘，所有音频数据在内存中处理
   - ONNX 版本：提供 MeloTTS-ONNX 版本，支持 ONNX 推理
-- 🎨 **CosyVoice 引擎**：新增 CosyVoice 语音合成引擎支持
+- 🎨 **CosyVoice 引擎**：新增 CosyVoice 语音合成引擎支持（位于 `plugin/cosyvoice/`）
   - SFT 模式：支持预设音色的 SFT 模式
   - 零样本克隆：支持零样本语音克隆模式
   - 流式生成：支持流式音频生成

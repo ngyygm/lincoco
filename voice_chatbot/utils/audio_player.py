@@ -401,7 +401,7 @@ class AudioPlayer:
             import traceback
             log_debug("PLAY", f"异常堆栈:\n{traceback.format_exc()}", indent=2)
     
-    def play(self, audio_segment: AudioSegment, task_id: int = None,
+    def play(self, audio_segment: AudioSegment, task_id: int,
              on_complete_callback: Optional[Callable[[bool, Optional[InterruptReason]], None]] = None,
              current_sentence_text: Optional[str] = None,
              status_update_interval: Optional[float] = None) -> bool:
