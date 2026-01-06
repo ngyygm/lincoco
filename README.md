@@ -18,7 +18,6 @@
   - **Edge TTS**：微软 Edge 浏览器的免费 TTS 服务，支持多种语言和音色
   - **CosyVoice**：阿里达摩院的高质量语音合成，支持 SFT 模式和零样本克隆
   - **MeloTTS**：Myshell 开源的高质量多语言 TTS，支持中、英、日等多种语言
-  - **MeloTTS-ONNX**：基于 ONNX 的优化版本，推理速度更快
 - 🎯 **打断机制**：支持延迟验证和 ASR 验证，实现自然的对话打断，智能识别误输入
 - 📝 **对话管理**：自动管理对话历史，支持输入合并和上下文管理
   - 播放进度实时跟踪：实时更新已完成句子和当前播放句子
@@ -38,28 +37,18 @@
   - 字典索引：每个语音目录下保存独立的索引文件
   - 按语音分类：按语音（voice）组织主目录
   - LRU 内存缓存：减少重复请求
-- 🎨 **WebUI 支持**：CosyVoice 和 MeloTTS 提供完整的 WebUI 界面
-- 🌐 **API 服务**：CosyVoice 和 MeloTTS 提供 RESTful API 服务
-- 🤖 **MeloTTS 自动管理**：程序启动时自动检测和启动 MeloTTS API 服务，支持模型预加载和内存优化
-  - 端口检测：自动检查端口占用情况
-  - 模型预加载：服务启动后自动预加载配置中指定的模型语言
-  - 内存优化：API 不再保存临时文件到磁盘，所有音频数据在内存中处理
 
 ## 🏗️ 系统架构
 
 ### 核心流程
 
 ```
-麦克风采集(含回声消除) → VAD → ASR → 对话调度器 → LLM流式生成 → TTS+播放
+麦克风采集 → VAD → ASR → 对话调度器 → LLM流式生成 → TTS+播放
 ```
 
 ### 线程架构
 
-系统采用双系统架构（主系统+副系统），包含9个线程：
-
-- **主线程（线程0）**：系统初始化和状态管理
-- **常驻后台线程（线程1-3）**：音频采集、VAD后台、事件总线处理
-- **按需启动线程（线程4-9）**：ASR识别、LLM+TTS处理、音频播放等
+系统采用双系统架构（主系统+副系统）
 
 详细架构说明请参考 [PROJECT_OUTLINE.md](voice_chatbot/PROJECT_OUTLINE.md)。
 
@@ -195,39 +184,33 @@ lincoco/
 │   │   ├── tts_file_cache.py       # TTS 文件缓存（字典索引）
 │   │   └── __init__.py             # 模块初始化
 │   │
-│   └── utils/                      # 工具模块
-│       ├── config.py              # 配置管理（含MeloTTS配置）
-│       ├── logger.py              # 日志系统
-│       ├── microphone.py          # 麦克风采集（从audio/移入）
-│       ├── audio_player.py        # 音频播放器（从tts/移入）
-│       ├── timer.py              # 性能计时器
-│       └── __init__.py            # 工具模块初始化
+│   │── utils/                      # 工具模块
+│   │   ├── config.py              # 配置管理（含MeloTTS配置）
+│   │   ├── logger.py              # 日志系统
+│   │   ├── microphone.py          # 麦克风采集（从audio/移入）
+│   │   ├── audio_player.py        # 音频播放器（从tts/移入）
+│   │   ├── timer.py              # 性能计时器
+│   │   └── __init__.py            # 工具模块初始化
+│   │
+│   ├── PROJECT_OUTLINE.md          # 项目大纲
+│   ├── REALTIME_INTERACTION_DESIGN.md  # 实时交互设计
+│   ├── DEVELOPMENT_LOG.md          # 开发日志
+│   ├── TEST_REPORT.md              # 测试报告
+│   └── llm/PERSONA_GUIDE.md        # 人设使用指南
 │
 ├── cache/                          # 缓存目录（不提交音频文件）
 │   ├── speaker_verification_audio/ # 声纹注册音频
-│   └── tts_cache/                  # TTS 缓存
-│       ├── edge_tts_cache/        # Edge TTS 缓存
-│       └── melo_tts_cache/        # MeloTTS 缓存
+│   │── tts_cache/                  # TTS 缓存
+│   │    ├── edge_tts_cache/        # Edge TTS 缓存
+│   │    └── melo_tts_cache/        # MeloTTS 缓存
+    └── logs/                       # 日志目录（不提交）
 │
 ├── pretrained/                     # 预训练模型（不提交）
 │   └── speech_campplus_sv_zh-cn_16k-common/
 │       └── campplus_cn_common.bin
 │
-├── logs/                           # 日志目录（不提交）
-│
-├── cleanup_3d_speaker.py          # 清理3D-Speaker多余文件
-├── extract_3d_speaker_from_git.py # 从git提取3D-Speaker
-├── prepare_minimal_3d_speaker.py  # 准备最小3D-Speaker
-│
 ├── Git快速参考.md                  # Git 快速参考
-├── Git提交指南.md                  # Git 提交指南
-│
-└── voice_chatbot/                  # 核心文档
-    ├── PROJECT_OUTLINE.md          # 项目大纲
-    ├── REALTIME_INTERACTION_DESIGN.md  # 实时交互设计
-    ├── DEVELOPMENT_LOG.md          # 开发日志
-    ├── TEST_REPORT.md              # 测试报告
-    └── llm/PERSONA_GUIDE.md        # 人设使用指南
+└── Git提交指南.md                  # Git 提交指南
 ```
 
 ### 项目结构变化说明
