@@ -20,6 +20,12 @@ class Config:
         # 系统级基准参数
         "system": {
             "thread_timeout": 1.0,  # 通用线程等待超时(秒),用于各类线程join操作
+
+            # 问候语配置
+            "greeting": {
+                "enabled": True,  # 是否启用问候语
+                "text": "你好！我是林可可，很高兴见到你！",  # 问候语文本
+            },
         },
 
         # ====== 2. 基础音频配置 ======
@@ -142,7 +148,7 @@ class Config:
                 "openai": {  # OpenAI兼容引擎配置
                     "api_base": "http://127.0.0.1:5000/v1",  # API基础URL(OpenAI兼容格式)
                     "api_key": "",  # API密钥
-                    "model_name": "qwen/qwen3-30b-a3b",  # 模型名称
+                    "model_name": "qwen3-1.7b",  # 模型名称   qwen/qwen3-30b-a3b
                 },
                 "ollama": {  # Ollama本地引擎配置
                     "api_base": "http://219.223.187.56:11434/v1",  # API基础URL(OpenAI兼容格式,默认本地ollama服务)

@@ -21,7 +21,7 @@ from urllib.parse import urlparse
 project_root = Path(__file__).parent
 sys.path.insert(0, str(project_root))
 
-from voice_chatbot.utils import Config, init_logger, log_info, log_error, log_warn, update_logger_filter, update_logger_category_colors
+from voice_chatbot.utils import Config, init_logger, log_info, log_error, log_warn, log_debug, update_logger_filter, update_logger_category_colors
 from voice_chatbot.dialogue import DialogueManager
 
 
@@ -372,12 +372,34 @@ def main():
             signal.signal(signal.SIGBREAK, signal_handler)
         
         # 启动系统
-        log_info("MAIN", "启动系统...", indent=0)
+        log_info("MAIN", "启动系统...（按 Ctrl+C 退出）", indent=0)
         dialogue_manager.start()
-        
-        log_info("MAIN", "系统已启动，等待用户输入...", indent=0)
-        log_info("MAIN", "按 Ctrl+C 退出", indent=0)
-        log_info("MAIN", "请开始快乐的聊天吧！！", indent=0)
+
+        # 处理问候语
+        greeting_config = config.get("system.greeting", {})
+        greeting_enabled = greeting_config.get("enabled", False)
+        if greeting_enabled:
+            greeting_text = greeting_config.get("text", "")
+            if greeting_text:
+                try:
+                    # 使用dialogue_manager中的tts_engine生成语音
+                    if dialogue_manager.tts_engine:
+                        audio_segment = dialogue_manager.tts_engine.generate(greeting_text)
+                        log_info("MAIN", f"播放问候语: {greeting_text}", indent=0)
+                        # 使用dialogue_manager中的audio_player播放语音
+                        if audio_segment is not None:
+                            # 获取audio_player实例
+                            audio_player = dialogue_manager.audio_player
+                            # 播放音频（使用task_id=None跳过任务取消检查）
+                            audio_player.play(audio_segment, task_id=None)
+                        else:
+                            log_error("MAIN", "问候语生成失败", indent=1)
+                    else:
+                        log_warn("MAIN", "TTS引擎未初始化，跳过问候语", indent=1)
+                except Exception as e:
+                    log_error("MAIN", f"问候语播放出错: {e}", indent=1)
+                    import traceback
+                    log_error("MAIN", f"异常堆栈:\n{traceback.format_exc()}", indent=1)
         
         # 保持主线程运行
         # 注意：KeyboardInterrupt会被SIGINT信号处理器捕获
