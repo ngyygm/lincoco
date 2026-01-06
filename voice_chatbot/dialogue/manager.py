@@ -310,7 +310,7 @@ class DialogueManager:
         # 初始化ASR模块
         from voice_chatbot.asr.fun_asr_stream import FunASRStream, CircularAudioBuffer
         pre_buffer = CircularAudioBuffer(
-            self.config.get("asr.pre_buffer_seconds", 0.5),
+            self.config.get("asr.pre_buffer_seconds", 1),
             self.config.get("audio.sample_rate", 16000)
         )
         self.asr = FunASRStream(
@@ -844,6 +844,9 @@ class DialogueManager:
         sub_state = self.state_manager.get_sub_state()
         main_state = self.state_manager.get_main_state()
         log_info("MANAGER", f"处理ASR结果: '{text}' (主系统={main_state.value}, 副系统={sub_state.value})", indent=0)
+
+        
+        self.state_manager.transition_main_state(MainSystemState.IDLE, "ASR线程识别结束，恢复IDLE状态")
 
         # 验证输入有效性
         is_valid = self._validate_input(text)

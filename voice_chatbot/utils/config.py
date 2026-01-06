@@ -57,7 +57,7 @@ class Config:
                                      # 影响识别延迟和准确性,需根据模型特性调整
             "encoder_chunk_look_back": 4,  # encoder self-attention lookback chunks数量,用于上下文理解
             "decoder_chunk_look_back": 1,  # decoder cross-attention lookback chunks数量,用于解码时参考历史
-            "pre_buffer_seconds": 0.5,  # 预缓存时长(秒),保留VAD检测前的音频避免丢失开头
+            "pre_buffer_seconds": 1.0,  # 预缓存时长(秒),保留VAD检测前的音频避免丢失开头
 
             # ASR队列和超时配置
             "audio_queue_maxsize": 100,  # 音频队列最大大小,用于缓存待识别的音频块
