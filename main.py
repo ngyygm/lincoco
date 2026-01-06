@@ -292,8 +292,6 @@ def main():
         epilog="""
 示例:
   python main.py                           # 使用默认配置
-  python main.py -c config.json            # 使用指定配置文件
-  python main.py --log-level DEBUG         # 设置日志级别为DEBUG
         """
     )
     parser.add_argument(
@@ -301,24 +299,6 @@ def main():
         type=str,
         default=None,
         help="配置文件路径（JSON格式），如果未指定则使用默认配置"
-    )
-    parser.add_argument(
-        "--log-level",
-        type=str,
-        choices=["DEBUG", "INFO", "WARN", "ERROR"],
-        default="INFO",
-        help="日志级别（默认: INFO）"
-    )
-    parser.add_argument(
-        "--log-dir",
-        type=str,
-        default="logs",
-        help="日志文件目录（默认: logs）"
-    )
-    parser.add_argument(
-        "--no-log-file",
-        action="store_true",
-        help="禁用日志文件输出（仅输出到控制台）"
     )
     
     args = parser.parse_args()

@@ -1,5 +1,174 @@
 # 开发日志
 
+## 2026-01-07 - Plugin目录重组
+
+### 实现内容
+
+完成了项目插件目录的重组工作，将所有第三方扩展功能模块统一移至 `plugin/` 目录下，实现更好的项目组织和管理。
+
+#### 核心功能
+
+1. **代码路径更新** ✅
+   - 更新 `voice_chatbot/asr/speaker_verification.py` 中的3D-Speaker路径
+   - 更新 `main.py` 中的MeloTTS路径
+   - 所有硬编码路径已更新为统一使用 `plugin/` 前缀
+
+2. **文档更新** ✅
+   - 更新 `README.md` 中的目录结构说明
+   - 更新项目结构变化说明
+   - 更新注意事项和最新更新部分
+   - 添加 CosyVoice 和 3D-Speaker 的相关链接
+   - 更新 `requirements.txt` 中的注释路径引用
+
+#### 新的目录结构
+
+```
+Lincoco/
+├── plugin/                         # 扩展功能插件目录（新增）
+│   ├── 3d-speaker/                 # 3D-Speaker 声纹识别模块
+│   ├── cosyvoice/                  # CosyVoice 语音合成模块
+│   └── melotts/                    # MeloTTS 语音合成模块
+├── voice_chatbot/                  # 核心模块目录
+├── cache/                          # 缓存目录
+├── pretrained/                     # 预训练模型
+├── main.py
+└── README.md
+```
+
+#### 不需要修改的部分
+
+以下模块通过 HTTP API 调用，不依赖本地路径，无需修改：
+
+1. **voice_chatbot/tts/melo_tts_engine.py**
+   - 通过 HTTP API 调用 MeloTTS 服务
+   - 无硬编码路径依赖
+
+2. **voice_chatbot/tts/cosyvoice_engine.py**
+   - 通过 HTTP API 调用 CosyVoice 服务
+   - 无硬编码路径依赖
+
+3. **voice_chatbot/utils/config.py**
+   - 只包含配置参数定义
+   - 无硬编码路径依赖
+
+4. **voice_chatbot/dialogue/manager.py**
+   - 通过配置动态引用引擎
+   - 无硬编码路径依赖
+
+#### 修改文件清单
+
+1. `voice_chatbot/asr/speaker_verification.py` - 更新 3D-Speaker 路径
+2. `main.py` - 更新 MeloTTS 路径
+3. `README.md` - 更新文档和目录结构说明
+4. `requirements.txt` - 更新注释路径引用
+
+#### 配置说明
+
+无需新增配置项。所有路径更新为使用相对路径 `plugin/` 前缀。
+
+#### 注意事项
+
+1. **MeloTTS API 服务启动**
+   - 程序启动时会自动从 `plugin/melotts/` 目录启动 MeloTTS API 服务
+   - 工作目录会自动设置为 `plugin/melotts/`
+   - HuggingFace 缓存目录设置为 `plugin/melotts/hf_download/`
+
+2. **3D-Speaker 模块导入**
+   - 程序运行时会自动将 `plugin/3d-speaker/` 添加到 Python 路径
+   - 确保该目录存在且包含必要的文件
+
+3. **配置文件**
+   - 如果您有自定义配置文件，请确保没有硬编码旧的模块路径
+   - 优先使用相对路径或配置项
+
+#### 测试建议
+
+完成重组后，建议进行以下测试：
+
+1. **声纹验证测试**
+   ```bash
+   python main.py
+   # 检查声纹验证是否能正常工作
+   ```
+
+2. **MeloTTS 测试**
+   - 配置 `tts.default_engine = "melotts"`
+   - 运行程序，检查 MeloTTS API 服务是否正常启动
+   - 测试语音合成功能
+
+3. **CosyVoice 测试**
+   - 配置 `tts.default_engine = "cosyvoice3"`
+   - 确保 CosyVoice API 服务在 `plugin/cosyvoice/` 目录下运行
+   - 测试语音合成功能
+
+#### 未来扩展
+
+有了统一的 `plugin/` 目录后，未来可以：
+
+1. **添加新的插件**
+   - 新的语音合成引擎（如 VITS）
+   - 新的 ASR 引擎（如 Whisper）
+   - 新的声纹识别引擎
+   - 其他功能扩展（如情感识别、音效处理等）
+
+2. **插件管理系统**
+   - 可以开发插件管理脚本
+   - 统一安装、更新、卸载插件
+   - 插件依赖管理
+
+3. **更好的文档组织**
+   - 每个插件可以有独立的文档
+   - 插件间依赖关系更清晰
+
+#### 回滚方案
+
+如果重组后出现问题，可以快速回滚：
+
+1. **手动回滚**
+   - 将 `plugin/` 目录下的三个文件夹移回根目录
+   - 恢复代码中的路径引用（使用 git history）
+
+2. **使用 Git 回滚**
+   ```bash
+   git checkout HEAD~1 -- voice_chatbot/asr/speaker_verification.py
+   git checkout HEAD~1 -- main.py
+   git checkout HEAD~1 -- README.md
+   git checkout HEAD~1 -- requirements.txt
+   ```
+
+#### 修改的代码片段
+
+**voice_chatbot/asr/speaker_verification.py (第19行)**
+```python
+# 修改前：
+THREE_D_SPEAKER_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "3D-Speaker")
+
+# 修改后：
+THREE_D_SPEAKER_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "plugin", "3D-Speaker")
+```
+
+**main.py (第176行)**
+```python
+# 修改前：
+melotts_dir = project_root / "MeloTTS"
+
+# 修改后：
+melotts_dir = project_root / "plugin" / "MeloTTS"
+```
+
+#### 总结
+
+本次重组成功将三个核心扩展模块统一到 `plugin/` 目录下，实现了：
+- ✅ 更清晰的项目结构
+- ✅ 更好的模块管理
+- ✅ 更容易的扩展能力
+- ✅ 所有必要的路径依赖已更新
+- ✅ 文档已同步更新
+
+**重组完成！** 🎉
+
+---
+
 ## 2025-12-31 02:18 - TTS引擎增强和首句切分优化
 
 ### 实现内容

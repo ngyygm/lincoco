@@ -38,22 +38,18 @@ ENV/
 .DS_Store
 
 # Logs
+cache/logs/
 logs/
 *.log
+plugin/CosyVoice/api_service.log
 
 # TTS Cache - 音频缓存文件通常很大，不应该上传到 Git（但保留 _index.json）
-voice_chatbot/tts/tts_cache/**/*.mp3
-voice_chatbot/tts/tts_cache/**/*.wav
-voice_chatbot/tts/tts_cache/**/*.flac
-voice_chatbot/tts/tts_cache/**/*.aac
-voice_chatbot/tts/tts_cache/**/*.ogg
-voice_chatbot/tts_cache/**/*.mp3
-voice_chatbot/tts_cache/**/*.wav
-voice_chatbot/tts_cache/**/*.flac
-voice_chatbot/tts_cache/**/*.aac
-voice_chatbot/tts_cache/**/*.ogg
-!voice_chatbot/tts/tts_cache/**/_index.json
-!voice_chatbot/tts_cache/**/_index.json
+cache/tts_cache/**/*.mp3
+cache/tts_cache/**/*.wav
+cache/tts_cache/**/*.flac
+cache/tts_cache/**/*.aac
+cache/tts_cache/**/*.ogg
+!cache/tts_cache/**/_index.json
 
 # Cache directories - 所有缓存文件（但保留索引和目录结构）
 cache/**/*.mp3
@@ -62,7 +58,9 @@ cache/**/*.flac
 cache/**/*.aac
 cache/**/*.ogg
 !cache/**/_index.json
+# 保留声纹注册音频目录结构，但忽略音频文件
 !cache/speaker_verification_audio/
+# 忽略所有音频文件，除了在 cache/speaker_verification_audio/ 中的 .wav 文件（我们想保留用于注册）
 
 # Pretrained models - 不提交预训练模型
 pretrained/
@@ -121,9 +119,12 @@ htmlcov/
 dmypy.json
 
 # Plugin 相关文件（忽略插件模块的缓存、输出和内部 git）
-plugin/melotts/hf_download/
-plugin/melotts/out/
-plugin/melotts/.git/
-plugin/cosyvoice/.git/
-plugin/3d-speaker/.git/
+plugin/MeloTTS/hf_download/
+plugin/MeloTTS/out/
+plugin/MeloTTS/__pycache__/
+plugin/MeloTTS/melotts.egg-info/
+plugin/MeloTTS/.git/
+plugin/CosyVoice/.git/
+plugin/CosyVoice/__pycache__/
+plugin/3D-Speaker/.git/
 
