@@ -20,6 +20,7 @@ class Config:
         # 系统级基准参数
         "system": {
             "thread_timeout": 1.0,  # 通用线程等待超时(秒),用于各类线程join操作
+            "user_name": "林嘿嘿",  # 用户名(用于人设文件中的{{user_name}}变量替换，以及声纹注册对应的文件名)
 
             # 问候语配置
             "greeting": {
@@ -91,17 +92,26 @@ class Config:
                 "model_id": "iic/speech_campplus_sv_zh-cn_16k-common",  # 3D-Speaker模型ID(从ModelScope加载)
                 "enroll_audio_path": "cache/speaker_verification_audio",  # 注册音频文件夹路径
                                                                    # 支持多个.wav文件,默认保存在speaker_verification_audio目录下
-                "similarity_threshold": 0.3,  # 相似度阈值(0.0-1.0),超过此值才认为是同一说话人,值越大越严格
+                "similarity_threshold": 0.4,  # 相似度阈值(0.0-1.0),超过此值才认为是同一说话人,值越大越严格
                 "min_audio_length": 0.5,  # 最小音频长度(秒),用于声纹验证的音频片段至少需要此长度
                 "cache_embedding": True,  # 是否缓存注册音频的嵌入向量(避免重复计算)
                 "record_duration": 8.0,  # 录制注册音频的时长(秒),默认8秒
                 "auto_record": True,  # 如果注册音频不存在,是否自动启动录制流程
+                
+                # 朗读列表配置
+                "reading_texts": [
+                    "欢迎使用语音助手系统，今天天气真不错。",
+                    "语音识别技术越来越智能了，这真的很令人兴奋。",
+                    "这是一个安静的测试，请确保声音清晰可辨。",
+                    "开始愉快的对话吧！",
+                ],  # 声纹注册时需要朗读的文本列表,列表中有多少句就要录制对应数量的音频文件
 
                 # 滑动窗口声纹验证
                 "sliding_window": {
                     "enabled": True,  # 是否启用滑动窗口验证(True=使用滑动窗口,False=使用固定窗口)
                     "window_length": 0.6,  # 窗口长度(秒),默认0.5秒
                     "window_stride": 0.2,  # 滑动步长(秒),默认0.2秒
+                    "consecutive_hits": 2,  # 连续命中次数,需要连续N次滑动步长都通过声纹验证才开始正式识别,值越大越严格
                 },
             },
 
@@ -127,7 +137,7 @@ class Config:
 
             # 流式输出参数
             "min_sentence_length": 8,  # 最小句子长度(字符数或单词数,根据语言类型),用于流式句子合并
-            "first_sentence_comma_delay_chars": 5,  # 首句逗号延迟字符数,遇到逗号后等待此数量的字符
+            "first_sentence_comma_delay_chars": 10,  # 首句逗号延迟字符数,遇到逗号后等待此数量的字符
                                                   # 如果期间出现句号等结束符则按结束符切分,否则按逗号切分
             "sentence_length_increment_rate": 2,  # 句子长度增量倍率,用于动态调整后续句子的最小长度
             "max_sentence_length": 200,  # 最大句子长度(字符数或单词数,根据语言类型),防止句子无限增长
@@ -136,7 +146,6 @@ class Config:
             "system_prompt": "你叫林可可,是16岁的女高中生,性格活泼开朗,谈吐风趣。你正在和用户聊天,回答简短,控制在300字以内,不要用表情。",  # 系统提示词(保留作为向后兼容的fallback)
             "persona_name": "lincoco",  # 默认人设名称(对应llm/personas/目录下的文件名,不含扩展名)
             "persona_dir": "llm/personas",  # 人设文件目录(相对于项目根目录)
-            "user_name": "林嘿嘿",  # 用户名(用于人设文件中的{{user_name}}变量替换)
 
             # 上下文配置
             "max_history_length": 50,  # 最大历史记录长度(对话轮数,每轮包含用户和助手两条消息)
@@ -148,7 +157,7 @@ class Config:
                 "openai": {  # OpenAI兼容引擎配置
                     "api_base": "http://127.0.0.1:5000/v1",  # API基础URL(OpenAI兼容格式)
                     "api_key": "",  # API密钥
-                    "model_name": "qwen3-1.7b",  # 模型名称   qwen/qwen3-30b-a3b
+                    "model_name": "qwen/qwen3-30b-a3b",  # 模型名称  qwen3-1.7b qwen/qwen3-30b-a3b
                 },
                 "ollama": {  # Ollama本地引擎配置
                     "api_base": "http://219.223.187.56:11434/v1",  # API基础URL(OpenAI兼容格式,默认本地ollama服务)
@@ -167,7 +176,7 @@ class Config:
         # 输出功能,将文本转换为语音,支持多引擎和性能优化
         "tts": {
             # TTS引擎选择
-            "default_engine": "melotts",  # 当前使用的TTS引擎(edgetts、melotts)
+            "default_engine": "cosyvoice_tts",  # 当前使用的TTS引擎(edgetts、melotts、cosyvoice_tts、cosyvoice3)
 
             # TTS音频处理
             "silence_threshold": -40,  # 静音检测阈值(dB),用于检测音频中的静音段
@@ -191,12 +200,14 @@ class Config:
             "tts_file_cache_dir": "cache/tts_cache",  # TTS缓存目录路径(支持绝对路径,如"D:/cache/tts";相对路径则相对于项目根目录)
             "tts_file_cache_max_length": 20,  # 最大缓存长度(中文按字符数,英文按单词数,超过此长度的TTS音频不保存)
             "tts_file_cache_auto_repair": True,  # 是否自动修复缺失的缓存文件(True:启动时检查并修复,False:仅在实际使用时生成)
+            "natural_audio_count": 5,  # 自然音频数量(0=不启用,>0表示同一文本保存多个不同版本的音频,每次随机选择),需要引擎支持
 
             # --- TTS引擎配置 ---
             "engines": {
                 # EdgeTTS引擎配置
                 "edge_tts": {
                     "is_streaming": False,  # 是否流式引擎(False=非流式)
+                    "support_natural_audio": False,  # 是否支持自然音频(True=支持,每次生成结果可能不同;False=不支持,同一文本总是生成相同音频)
                     "voice_map": {  # 语言-语音映射表
                         "zh": "zh-CN-XiaoyiNeural",  # 中文语音
                         "en": "en-US-AnaNeural",  # 英文语音
@@ -212,6 +223,7 @@ class Config:
                 # MeloTTS引擎配置
                 "melo_tts": {
                     "is_streaming": False,  # 是否流式引擎(False=非流式)
+                    "support_natural_audio": False,  # 是否支持自然音频(True=支持,每次生成结果可能不同;False=不支持,同一文本总是生成相同音频)
                     "api_url": "http://127.0.0.1:8101",  # MeloTTS API服务地址
                     "api_endpoint": "/tts",  # API端点路径
                     "init_endpoint": "/init",  # 模型初始化端点路径
@@ -232,6 +244,21 @@ class Config:
                     "noise_scale_w": 0.8,  # 噪声宽度比例(默认值,控制语音自然度)
                     "speed": 1.0,  # 语速(默认值,1.0为正常速度,大于1.0加快,小于1.0减慢)
                 },
+
+                # CosyVoice TTS引擎配置
+                "cosyvoice_tts": {
+                    "is_streaming": False,  # 是否流式引擎(False=非流式)
+                    "support_natural_audio": True,  # 是否支持自然音频(True=支持,每次生成结果可能不同;False=不支持,同一文本总是生成相同音频)
+                    "api_url": "http://219.223.187.56:9880",  # CosyVoice API服务地址
+                    "set_model_endpoint": "/set_model",  # 设置参考音频端点路径
+                    "generate_endpoint": "/generate",  # 生成音频端点路径
+                    "get_model_endpoint": "/get_model",  # 获取当前参考音频配置端点路径
+                    "timeout": 30.0,  # HTTP请求超时时间(秒)
+                    "reference_wav_path": None,  # 参考音频文件路径(用于3s极速复刻,如果为None则需要在API服务中手动设置)
+                    "reference_text": None,  # 参考文本(可选,如果不提供且use_filename_as_text=True,则从文件名提取)
+                    "use_filename_as_text": True,  # 是否使用文件名作为参考文本(True=使用文件名,避免ASR识别;False=需要提供reference_text)
+                    "speed": 1.0,  # 语速(默认值,1.0为正常速度,大于1.0加快,小于1.0减慢)
+                },
             },
         },
 
@@ -248,8 +275,11 @@ class Config:
             "show_source": True,  # 是否显示代码来源前缀(如"manager.py"、"fun_asr_stream.py"),与类别区分开
 
             # 日志过滤配置
-            "filtered_levels": ["INFO"],  # 允许输出的日志级别列表(白名单,如["DEBUG"]),只有在此列表中的级别才会输出,为空则不过滤级别
-            "filtered_categories": ["THREAD", "EVENT", "MIC", "TIME", "CTX", "MANAGER", "VAD", "PUN"],  # 被过滤的日志类别列表(黑名单),这些类别的日志将不输出
+            # 允许输出的日志级别列表(白名单,如["INFO", "DEBUG", "WARN", "ERROR"]),只有在此列表中的级别才会输出,为空则不过滤级别
+            "filtered_levels": ["INFO"],  
+            # 允许输出的日志类别列表
+            # (白名单,如["THREAD", "EVENT", "MIC", "TIME", "CTX", "MANAGER", "VAD", "PUN", "SPE", "ASR", "TTS", "LLM", "PLAY", "MAIN"]),只有在此列表中的类别才会输出,为空则不过滤类别  
+            "filtered_categories": ["ASR", "TTS", "LLM", "PLAY", "MAIN"],  
 
             # 日志类别专属颜色配置
             # 支持的颜色名称: BLACK, RED, GREEN, YELLOW, BLUE, MAGENTA, CYAN, WHITE,

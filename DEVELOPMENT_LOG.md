@@ -1,5 +1,158 @@
 # 开发日志
 
+## 2026-01-13 - CosyVoice TTS引擎新增与优化
+
+### 实现内容
+
+完成了CosyVoice TTS引擎的新增功能实现，包括缓存机制支持自然语音、配置参数优化、声纹认证注册流程优化等。
+
+#### 核心功能
+
+1. **新增CosyVoice TTS引擎** (`voice_chatbot/tts/cosyvoice_tts_engine.py`) ✅
+   - 通过HTTP API调用CosyVoice服务进行语音合成
+   - 支持3s极速复刻（基于参考音频的语音克隆）
+   - 支持参考音频配置：支持使用文件名作为参考文本或手动提供参考文本
+   - 支持语速调整（speed参数）
+   - 集成LRU内存缓存机制，减少重复API请求
+   - 支持文件缓存，持久化保存TTS音频
+   - 支持静音裁剪和响度归一化
+   - 支持任务取消检查
+   - 集成事件系统，发布TTS相关事件
+
+2. **TTS缓存机制支持自然语音** ✅
+   - **自然音频配置**：在`TTSFileCache`中新增`natural_audio_count`参数
+   - **多版本缓存**：同一文本可以保存多个不同版本的音频文件（如5个版本）
+   - **随机选择**：加载时随机选择一个版本，增加语音的自然变化
+   - **版本追踪**：使用文件名后缀`_0`, `_1`, `_2`等区分不同版本
+   - **索引优化**：索引文件中保存版本ID列表（`saved_ids`字段）
+   - **引擎支持标识**：每个引擎配置中添加`support_natural_audio`标识
+
+3. **配置参数优化** ✅
+   - **新增TTS缓存配置**：
+     - `tts.natural_audio_count`: 自然音频数量（0=不启用，>0表示同一文本保存多个版本）
+     - `tts.tts_file_cache_auto_repair`: 是否自动修复缺失的缓存文件
+   - **新增引擎配置**：
+     - `tts.engines.cosyvoice_tts`: CosyVoice引擎完整配置
+       - `api_url`: API服务地址
+       - `set_model_endpoint`: 设置参考音频端点
+       - `generate_endpoint`: 生成音频端点
+       - `get_model_endpoint`: 获取当前参考音频配置端点
+       - `timeout`: HTTP请求超时时间
+       - `reference_wav_path`: 参考音频文件路径
+       - `reference_text`: 参考文本
+       - `use_filename_as_text`: 是否使用文件名作为参考文本
+       - `speed`: 默认语速
+       - `support_natural_audio`: 是否支持自然音频
+   - **每个引擎新增**：
+     - `is_streaming`: 是否流式引擎
+     - `support_natural_audio`: 是否支持自然音频
+
+4. **声纹认证注册流程优化** (`voice_chatbot/asr/speaker_verification.py`) ✅
+   - **用户名配置**：从`system.user_name`配置项读取用户名
+   - **多场景录制支持**：支持多场景声纹录制（安静环境、背景噪音、远距离等）
+   - **自动注册引导**：首次运行时自动引导用户录制声纹注册音频
+   - **录制时长控制**：可配置录制时长（默认8秒）
+   - **滑动窗口验证**：支持滑动窗口模式，提高声纹验证的准确性和灵活性
+   - **嵌 入缓存**：支持缓存声纹嵌入向量，提高验证速度
+   - **多声纹并行比对**：使用张量并行计算所有注册音频的相似度
+   - **多声纹支持**：支持多个注册音频文件，只要有一个匹配就通过验证
+
+#### 修改文件清单
+
+1. `voice_chatbot/tts/cosyvoice_tts_engine.py` - 新建：CosyVoice TTS引擎实现
+2. `voice_chatbot/tts/tts_file_cache.py` - 修改：支持自然音频多版本缓存
+3. `voice_chatbot/utils/config.py` - 修改：新增CosyVoice配置和自然音频配置
+4. `voice_chatbot/asr/speaker_verification.py` - 修改：声纹认证注册流程优化
+5. `voice_chatbot/tts/__init__.py` - 修改：导出CosyVoiceTTSEngine
+6. `README.md` - 修改：更新项目说明文档
+
+#### 配置说明
+
+**CosyVoice TTS引擎配置**：
+```python
+"tts": {
+    "engines": {
+        "cosyvoice_tts": {
+            "api_url": "http://127.0.0.1:9880",
+            "set_model_endpoint": "/set_model",
+            "generate_endpoint": "/generate",
+            "get_model_endpoint": "/get_model",
+            "timeout": 30.0,
+            "reference_wav_path": None,  # 参考音频路径
+            "reference_text": None,  # 参考文本
+            "use_filename_as_text": True,  # 使用文件名作为参考文本
+            "speed": 1.0,
+            "support_natural_audio": True,
+        }
+    }
+}
+```
+
+**自然音频缓存配置**：
+```python
+"tts": {
+    "natural_audio_count": 5,  # 保存5个版本
+    "tts_file_cache_auto_repair": True,  # 启用自动修复
+}
+```
+
+**声纹验证配置**：
+```python
+"asr": {
+    "speaker_verification": {
+        "enabled": True,
+        "enroll_audio_path": "cache/speaker_verification_audio",
+        "model_id": "iic/speech_campplus_sv_zh-cn_16k-common",
+        "similarity_threshold": 0.3,
+        "min_audio_length": 0.5,
+        "auto_record": True,
+        "cache_embedding": True,
+        "record_duration": 8.0,
+        "sliding_window": {
+            "enabled": True,
+            "window_length": 0.6,
+            "window_stride": 0.2,
+        }
+    }
+}
+```
+
+#### 关键实现细节
+
+1. **CosyVoice引擎**：
+   - 使用`requests.Session`复用HTTP连接，提高性能
+   - 启动时通过`/set_model`接口设置参考音频（3s极速复刻）
+   - 支持`natural_audio_count`配置，引擎通过`support_natural_audio`标识是否支持
+   - 如果总配置设置了自然音频数量，但引擎不支持，则自动降级为0
+
+2. **自然音频缓存**：
+   - 文件命名：`{text_hash}_{audio_id}.mp3`（如`a1b2c3d4_0.mp3`）
+   - 索引格式：`{"hash": "a1b2c3d4", "saved_ids": [0, 1, 2, 3, 4]}`
+   - 加载时检查版本数量，达到预定数量后才认为缓存存在
+   - 随机选择一个版本加载，增加语音自然变化
+
+3. **声纹认证**：
+   - 用户名从`system.user_name`读取，默认为"default"
+   - 支持多场景录制（安静、噪音、远距离等）
+   - 滑动窗口：`window_length`（窗口长度）和`window_stride`（滑动步长）
+   - 并行比对：使用张量并行计算所有注册音频的相似度
+
+#### 测试结果
+
+- ✅ CosyVoice引擎基本功能测试通过
+- ✅ 自然音频多版本缓存测试通过
+- ✅ 配置参数验证通过
+- ✅ 声纹认证注册流程测试通过
+
+#### 相关文件
+
+- `voice_chatbot/tts/cosyvoice_tts_engine.py` - CosyVoice TTS引擎实现
+- `voice_chatbot/tts/tts_file_cache.py` - TTS文件缓存管理器（支持自然音频）
+- `voice_chatbot/utils/config.py` - 配置管理（新增CosyVoice和自然音频配置）
+- `voice_chatbot/asr/speaker_verification.py` - 声纹验证（注册流程优化）
+
+---
+
 ## 2026-01-07 - Plugin目录重组
 
 ### 实现内容

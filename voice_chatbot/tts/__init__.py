@@ -22,11 +22,21 @@ except ImportError:
     MeloTTSEngine = None
     HAS_MELOTTS = False
 
+# CosyVoice TTS引擎（可选，需要CosyVoice API服务）
+try:
+    from .cosyvoice_tts_engine import CosyVoiceTTSEngine
+    HAS_COSYVOICE_TTS = True
+except ImportError:
+    CosyVoiceTTSEngine = None
+    HAS_COSYVOICE_TTS = False
+
 __all__ = [
     'EdgeTTSEngine',
     'CosyVoice3Engine',
     'HAS_COSYVOICE3',
     'MeloTTSEngine',
     'HAS_MELOTTS',
+    'CosyVoiceTTSEngine',
+    'HAS_COSYVOICE_TTS',
 ]
 

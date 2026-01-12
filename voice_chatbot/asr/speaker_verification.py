@@ -9,6 +9,7 @@ import os
 import sys
 import pathlib
 import threading
+import hashlib
 import numpy as np
 import torch
 import torchaudio
@@ -40,6 +41,21 @@ except ImportError:
 from voice_chatbot.utils import log_info, log_warn, log_error, log_debug
 
 
+def _get_text_filename(text: str) -> str:
+    """
+    根据文本内容生成文件名（使用MD5哈希）
+    
+    Args:
+        text: 文本内容
+        
+    Returns:
+        文件名（不含扩展名）
+    """
+    # 使用MD5哈希生成文件名，确保相同文本总是生成相同文件名
+    text_hash = hashlib.md5(text.encode('utf-8')).hexdigest()
+    return f"text_{text_hash}"
+
+
 class SpeakerVerification:
     """声纹验证器"""
     
@@ -67,86 +83,179 @@ class SpeakerVerification:
         
         # 从配置获取参数
         self.model_id = config.get("asr.speaker_verification.model_id", "iic/speech_campplus_sv_zh-cn_16k-common")
-        self.enroll_audio_path = config.get("asr.speaker_verification.enroll_audio_path", "")
+        base_enroll_audio_path = config.get("asr.speaker_verification.enroll_audio_path", "")
         self.similarity_threshold = config.get("asr.speaker_verification.similarity_threshold", 0.5)
         self.min_audio_length = config.get("asr.speaker_verification.min_audio_length", 1.0)
         self.cache_embedding = config.get("asr.speaker_verification.cache_embedding", True)
+        
+        # 获取用户名
+        self.user_name = config.get("system.user_name", "")
+        if not self.user_name:
+            log_warn("SPE", "未配置用户名（system.user_name），将使用默认用户名'default'")
+            self.user_name = "default"
+        
+        log_info("SPE", f"当前用户名: {self.user_name}")
         
         # 验证参数
         auto_record = config.get("asr.speaker_verification.auto_record", True)
         
         # 如果路径为空，使用默认路径（speaker_verification_audio目录）
-        if not self.enroll_audio_path:
+        if not base_enroll_audio_path:
             if auto_record:
                 # 使用默认路径（speaker_verification_audio目录）
                 default_path = Path("speaker_verification_audio")
-                self.enroll_audio_path = str(default_path)
-                log_info("SPE", f"未配置注册音频路径，使用默认路径: {self.enroll_audio_path}")
+                base_enroll_audio_path = str(default_path)
+                log_info("SPE", f"未配置注册音频路径，使用默认路径: {base_enroll_audio_path}")
             else:
                 log_error("SPE", "声纹锁已启用但未配置注册音频路径（asr.speaker_verification.enroll_audio_path），且自动录制已禁用")
                 self.enabled = False
                 return
         
         # 处理相对路径：如果是相对路径，确保相对于项目根目录
-        enroll_path = Path(self.enroll_audio_path)
-        if not enroll_path.is_absolute():
+        base_enroll_path = Path(base_enroll_audio_path)
+        if not base_enroll_path.is_absolute():
             # 获取项目根目录（voice_chatbot的父目录）
             project_root = Path(__file__).parent.parent.parent
-            self.enroll_audio_path = str(project_root / enroll_path)
-            log_debug("SPE", f"注册音频路径（相对路径已转换为绝对路径）: {self.enroll_audio_path}", indent=1)
+            base_enroll_audio_path = str(project_root / base_enroll_path)
+            log_debug("SPE", f"注册音频基础路径（相对路径已转换为绝对路径）: {base_enroll_audio_path}", indent=1)
         
-        # 检查注册音频是否存在，如果不存在或为空目录则触发录制流程
-        enroll_path = Path(self.enroll_audio_path)
-        needs_recording = False
+        # 根据用户名构建用户特定的注册音频路径
+        base_enroll_path = Path(base_enroll_audio_path)
+        user_enroll_path = base_enroll_path / self.user_name
+        self.enroll_audio_path = str(user_enroll_path)
+        log_info("SPE", f"用户注册音频路径: {self.enroll_audio_path}")
         
-        if not enroll_path.exists():
-            needs_recording = True
-            log_debug("SPE", f"注册音频路径不存在: {self.enroll_audio_path}")
-        elif enroll_path.is_file():
-            # 如果是文件，检查文件大小是否为0
-            if enroll_path.stat().st_size == 0:
-                needs_recording = True
-                log_debug("SPE", "注册音频文件为空")
-        elif enroll_path.is_dir():
-            # 如果是目录，检查是否包含任何.wav文件
-            wav_files = list(enroll_path.glob('*.wav'))
-            if not wav_files:
-                needs_recording = True
-                log_debug("SPE", "注册音频目录为空（没有找到.wav文件）")
-            else:
-                log_debug("SPE", f"注册音频目录存在，包含 {len(wav_files)} 个.wav文件")
+        # 获取朗读列表配置
+        reading_texts = config.get("asr.speaker_verification.reading_texts", [])
+        if not reading_texts:
+            # 如果没有配置朗读列表，使用默认的3个场景
+            reading_texts = [
+                "欢迎使用语音助手系统，今天天气真不错。",
+                "语音识别技术越来越智能了，这真的很令人兴奋。",
+                "这是一个安静的测试，请确保声音清晰可辨。",
+            ]
+            log_warn("SPE", "未配置朗读列表（asr.speaker_verification.reading_texts），使用默认列表", indent=1)
         
-        if needs_recording:
-            if auto_record:
-                log_info("SPE", "将启动声纹注册录制流程")
-                # 尝试录制注册音频
-                if not self._record_enroll_audio():
-                    log_error("SPE", "录制注册音频失败，声纹锁功能将禁用")
-                    self.enabled = False
-                    return
-            else:
-                log_error("SPE", f"注册音频路径不存在或为空: {self.enroll_audio_path}，且自动录制已禁用")
-                self.enabled = False
-                return
+        self.reading_texts = reading_texts
+        log_info("SPE", f"配置了 {len(self.reading_texts)} 句朗读文本")
+        
+        # 延迟检查注册音频（不在初始化时执行，等待系统完全初始化后）
+        # 注册音频检查将在 check_and_enroll_if_needed() 方法中执行
+        self.auto_record = auto_record
+        self.enrollment_checked = False  # 标记是否已检查过注册音频
         
         # 模型相关
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         self.embedding_model = None
         self.feature_extractor = None
         self.enroll_embeddings = []  # 注册音频的嵌入向量列表
+        self.base_enroll_audio_path = base_enroll_audio_path  # 保存基础路径，用于用户名变更时重新构建路径
         
-        # 加载模型和注册音频
+        # 只加载声纹模型，不加载注册音频（注册音频将在check_and_enroll_if_needed中加载）
+        # 即使没有注册音频，也允许ASR继续工作，后续可以动态加载
         if not self._load_model():
             log_error("SPE", "声纹模型加载失败，声纹锁功能将禁用")
             self.enabled = False
             return
         
-        if not self._load_enroll_audio():
-            log_error("SPE", "注册音频加载失败，声纹锁功能将禁用")
-            self.enabled = False
-            return
+        log_info("SPE", "声纹模型加载完成，等待系统初始化完成后检查注册音频")
+        log_info("SPE", "注意：即使没有注册音频，ASR也可以正常使用，声纹验证将在注册后自动启用", indent=1)
+    
+    def check_and_enroll_if_needed(self, asr_model=None, tts_engine=None, audio_player=None):
+        """
+        检查注册音频是否齐全，如果缺少则进行注册
+        此方法应在系统完全初始化后调用（ASR、TTS等模块已加载）
         
-        log_info("SPE", f"已加载 {len(self.enroll_embeddings)} 个注册声纹，声纹锁功能已启用，相似度阈值: {self.similarity_threshold}")
+        Args:
+            asr_model: 已加载的ASR模型（可选，如果不提供则会在录制时加载）
+            tts_engine: 已加载的TTS引擎（可选，如果不提供则会在录制时创建）
+            audio_player: 已加载的音频播放器（可选，如果不提供则会在录制时创建）
+        
+        Returns:
+            True表示检查/注册成功，False表示失败（但不禁用功能，允许后续重试）
+        """
+        if not self.enabled:
+            return True  # 如果未启用，直接返回成功
+        
+        if self.enrollment_checked:
+            return True  # 已经检查过了，直接返回
+        
+        # 更新ASR模型引用（如果提供）
+        if asr_model is not None:
+            self.asr_model = asr_model
+            log_info("SPE", "使用已加载的ASR模型进行声纹注册", indent=1)
+        
+        # 检查注册音频是否齐全
+        enroll_path = Path(self.enroll_audio_path)
+        missing_indices = []
+        
+        if not enroll_path.exists():
+            # 目录不存在，需要录制所有
+            missing_indices = list(range(len(self.reading_texts)))
+            log_info("SPE", f"用户注册音频路径不存在: {self.enroll_audio_path}，需要注册")
+        elif enroll_path.is_file():
+            # 如果是文件，检查文件大小是否为0
+            if enroll_path.stat().st_size == 0:
+                missing_indices = list(range(len(self.reading_texts)))
+                log_info("SPE", "注册音频文件为空，需要注册")
+        elif enroll_path.is_dir():
+            # 检查是否所有句子都已录制（使用文本哈希匹配）
+            existing_files = {f.stem for f in enroll_path.glob("*.wav")}  # 获取所有文件名（不含扩展名）
+            
+            for i, text in enumerate(self.reading_texts):
+                expected_filename = _get_text_filename(text)
+                if expected_filename not in existing_files:
+                    missing_indices.append(i)
+            
+            if missing_indices:
+                log_info("SPE", f"检测到缺少 {len(missing_indices)} 个音频文件，需要补录")
+                for idx in missing_indices:
+                    text = self.reading_texts[idx]
+                    filename = _get_text_filename(text)
+                    log_info("SPE", f"  缺少: {filename}.wav - {text}", indent=1)
+            else:
+                log_info("SPE", f"所有 {len(self.reading_texts)} 个音频文件已齐全")
+        
+        needs_recording = len(missing_indices) > 0
+        self.missing_indices = missing_indices
+        
+        if needs_recording:
+            if self.auto_record:
+                log_info("SPE", "将启动声纹注册录制流程")
+                # 保存TTS引擎和音频播放器引用（如果提供）
+                self._tts_engine = tts_engine
+                self._audio_player = audio_player
+                # 尝试录制注册音频
+                if not self._record_enroll_audio():
+                    log_warn("SPE", "录制注册音频失败，但ASR可以继续使用，可稍后重试")
+                    # 不禁用功能，允许后续重试
+                    self.enrollment_checked = True
+                    return False
+            else:
+                log_warn("SPE", f"注册音频路径不存在或为空: {self.enroll_audio_path}，且自动录制已禁用")
+                # 不禁用功能，允许后续手动注册
+                self.enrollment_checked = True
+                return False
+        else:
+            # 如果不需要录制，加载已存在的注册音频
+            if not self._load_enroll_audio():
+                log_warn("SPE", "注册音频加载失败，声纹验证暂时禁用，但ASR可以继续使用")
+                # 不禁用功能，允许后续重试
+                self.enrollment_checked = True
+                return False
+        
+        self.enrollment_checked = True
+        log_info("SPE", f"声纹注册检查完成，已加载 {len(self.enroll_embeddings)} 个注册声纹")
+        
+        # 如果有注册音频，启用声纹验证
+        if len(self.enroll_embeddings) > 0:
+            self.enabled = True
+            log_info("SPE", "声纹验证已启用")
+        else:
+            # 没有注册音频，但保持功能可用（允许后续动态加载）
+            log_info("SPE", "声纹验证功能已准备就绪，等待注册音频")
+        
+        return True
     
     def _load_model(self) -> bool:
         """
@@ -377,6 +486,86 @@ class SpeakerVerification:
             log_error("SPE", f"提取嵌入向量失败: {e}")
             return None
     
+    def _check_user_name_change(self) -> bool:
+        """
+        检查用户名是否变更，如果变更则重新加载注册音频
+        
+        Returns:
+            True表示用户名已变更并重新加载成功，False表示未变更或重新加载失败
+        """
+        if not self.enabled:
+            return False
+        
+        # 获取当前配置中的用户名
+        current_user_name = self.config.get("system.user_name", "")
+        if not current_user_name:
+            current_user_name = "default"
+        
+        # 如果用户名未变更，直接返回
+        if current_user_name == self.user_name:
+            return False
+        
+        log_info("SPE", f"检测到用户名变更: {self.user_name} -> {current_user_name}")
+        
+        # 更新用户名
+        old_user_name = self.user_name
+        self.user_name = current_user_name
+        
+        # 重新构建用户特定的注册音频路径
+        base_enroll_path = Path(self.base_enroll_audio_path)
+        user_enroll_path = base_enroll_path / self.user_name
+        self.enroll_audio_path = str(user_enroll_path)
+        
+        log_info("SPE", f"切换到用户注册音频路径: {self.enroll_audio_path}")
+        
+        # 检查新用户的注册音频是否齐全
+        enroll_path = Path(self.enroll_audio_path)
+        missing_indices = []
+        
+        if not enroll_path.exists():
+            # 目录不存在，需要录制所有
+            missing_indices = list(range(len(self.reading_texts)))
+            log_info("SPE", f"新用户注册音频路径不存在，需要注册")
+        elif enroll_path.is_dir():
+            # 检查是否所有句子都已录制（使用文本哈希匹配）
+            existing_files = {f.stem for f in enroll_path.glob("*.wav")}  # 获取所有文件名（不含扩展名）
+            
+            for i, text in enumerate(self.reading_texts):
+                expected_filename = _get_text_filename(text)
+                if expected_filename not in existing_files:
+                    missing_indices.append(i)
+            
+            if missing_indices:
+                log_info("SPE", f"新用户缺少 {len(missing_indices)} 个音频文件，需要补录")
+            else:
+                log_info("SPE", f"新用户所有 {len(self.reading_texts)} 个音频文件已齐全")
+        
+        needs_recording = len(missing_indices) > 0
+        self.missing_indices = missing_indices
+        
+        # 如果需要注册，尝试自动录制
+        if needs_recording:
+            auto_record = self.config.get("asr.speaker_verification.auto_record", True)
+            if auto_record:
+                log_info("SPE", "将启动新用户的声纹注册录制流程")
+                if not self._record_enroll_audio():
+                    log_error("SPE", "新用户录制注册音频失败，声纹锁功能将禁用")
+                    self.enabled = False
+                    return False
+            else:
+                log_error("SPE", f"新用户注册音频路径不存在或为空: {self.enroll_audio_path}，且自动录制已禁用")
+                self.enabled = False
+                return False
+        
+        # 重新加载注册音频
+        if not self._load_enroll_audio():
+            log_error("SPE", "新用户注册音频加载失败，声纹锁功能将禁用")
+            self.enabled = False
+            return False
+        
+        log_info("SPE", f"已切换到用户 {self.user_name}，加载了 {len(self.enroll_embeddings)} 个注册声纹")
+        return True
+    
     def verify(self, audio_data: np.ndarray, sample_rate: int = 16000) -> Tuple[bool, float]:
         """
         验证音频是否匹配注册的声纹
@@ -384,12 +573,45 @@ class SpeakerVerification:
         Args:
             audio_data: 音频数据（numpy数组，float32格式）
             sample_rate: 采样率
-            
+        
         Returns:
             (是否匹配, 最高相似度分数)
         """
         if not self.enabled:
             return True, 1.0  # 如果未启用，直接通过
+        
+        # 如果注册音频还未加载，尝试加载（可能是动态启用声纹）
+        if not self.enrollment_checked:
+            log_debug("SPE", "注册音频未检查，尝试加载...")
+            # 检查注册音频是否存在
+            enroll_path = Path(self.enroll_audio_path)
+            if enroll_path.exists() and enroll_path.is_dir():
+                wav_files = list(enroll_path.glob("*.wav"))
+                if wav_files:
+                    # 如果有注册音频文件，尝试加载
+                    if self._load_enroll_audio():
+                        self.enrollment_checked = True
+                        log_info("SPE", f"动态加载了 {len(self.enroll_embeddings)} 个注册声纹")
+                    else:
+                        log_warn("SPE", "注册音频加载失败，声纹验证将暂时禁用")
+                        return True, 1.0  # 加载失败时暂时允许通过
+                else:
+                    # 没有注册音频文件，标记为已检查（避免重复检查）
+                    self.enrollment_checked = True
+                    log_info("SPE", "未找到注册音频文件，声纹验证暂时禁用（等待注册）")
+                    return True, 1.0  # 没有注册音频时暂时允许通过
+            else:
+                # 路径不存在，标记为已检查
+                self.enrollment_checked = True
+                log_info("SPE", "注册音频路径不存在，声纹验证暂时禁用（等待注册）")
+                return True, 1.0  # 路径不存在时暂时允许通过
+        
+        # 如果注册音频为空，暂时允许通过
+        if not self.enroll_embeddings:
+            return True, 1.0
+        
+        # 检查用户名是否变更
+        self._check_user_name_change()
         
         try:
             # 提取嵌入向量
@@ -434,62 +656,74 @@ class SpeakerVerification:
     
     def _record_enroll_audio(self) -> bool:
         """
-        录制注册音频（多场景录制）
+        录制注册音频（根据配置的朗读列表录制）
         
         Returns:
             True表示录制成功，False表示失败
         """
         try:
-            log_info("SPE", "开始录制声纹注册音频流程...")
+            # 确定需要录制的句子索引
+            if hasattr(self, 'missing_indices') and self.missing_indices:
+                indices_to_record = self.missing_indices
+                log_info("SPE", f"开始补录声纹注册音频，需要录制 {len(indices_to_record)} 个句子...")
+            else:
+                # 如果没有missing_indices，录制所有句子
+                indices_to_record = list(range(len(self.reading_texts)))
+                log_info("SPE", f"开始录制声纹注册音频流程，共 {len(indices_to_record)} 个句子...")
             
-            # 定义3个录制场景
-            recording_scenes = [
-                {
-                    "index": 1,
-                    "prompt": "请用正常方式说以下内容，第一句开始录音",
-                    "instruction": "请用正常语速朗读以下内容：\n",
-                    "reading_text": "欢迎使用语音助手系统，今天天气真不错。",
-                    "scenario_hint": "（场景1：正常说话，距离麦克风约3-10厘米）"
-                },
-                {
-                    "index": 2,
-                    "prompt": "稍微离远一点，然后朗读以下内容，第二句开始录音",
-                    "instruction": "请离开麦克风远一点，然后朗读以下内容：\n",
-                    "reading_text": "语音识别技术越来越智能了，这真的很令人兴奋。",
-                    "scenario_hint": "（场景2：稍远距离说话，距离麦克风约20-60厘米）"
-                },
-                {
-                    "index": 3,
-                    "prompt": "第三句，靠近一点小声说话，开始录音",
-                    "instruction": "请靠近麦克风，用小声朗读以下内容：\n",
-                    "reading_text": "这是一个安静的测试，请确保声音清晰可辨。",
-                    "scenario_hint": "（场景3：近距离低声说话，距离麦克风约1~3厘米）"
-                }
-            ]
+            # 根据配置的朗读列表构建录制场景
+            recording_scenes = []
+            for idx in indices_to_record:
+                sentence_num = idx + 1
+                reading_text = self.reading_texts[idx]
+                recording_scenes.append({
+                    "index": sentence_num,
+                    "text_index": idx,  # 在列表中的索引
+                    "prompt": f"请朗读以下内容，第{sentence_num}句开始录音",
+                    "instruction": f"请用正常语速朗读以下内容（第 {sentence_num}/{len(self.reading_texts)} 句）：\n",
+                    "reading_text": reading_text,
+                    "scenario_hint": f"（距离麦克风约3-10厘米，正常说话）"
+                })
             
-            # 获取TTS引擎和音频播放器（使用系统配置的TTS引擎）
+            # 获取TTS引擎和音频播放器（优先使用已加载的，否则创建新的）
             try:
-                from voice_chatbot.utils.audio_player import AudioPlayer
-                from voice_chatbot.tts.edge_tts_engine import EdgeTTSEngine
-                from voice_chatbot.tts.melo_tts_engine import MeloTTSEngine
+                # 如果已提供TTS引擎和音频播放器，直接使用
+                if hasattr(self, '_tts_engine') and self._tts_engine is not None:
+                    tts_engine = self._tts_engine
+                    log_info("SPE", "使用已加载的TTS引擎进行语音提示", indent=1)
+                else:
+                    from voice_chatbot.tts.edge_tts_engine import EdgeTTSEngine
+                    from voice_chatbot.tts.melo_tts_engine import MeloTTSEngine
+                    
+                    # 根据配置选择TTS引擎（使用config中的default_engine）
+                    tts_engine_name = self.config.get("tts.default_engine", "edgetts").lower()
+                    
+                    if tts_engine_name == "melotts":
+                        tts_engine = MeloTTSEngine(config=self.config, event_bus=None)
+                        log_info("SPE", "创建 MeloTTS 引擎进行语音提示", indent=1)
+                    elif tts_engine_name == "cosyvoice3":
+                        from voice_chatbot.tts.cosyvoice3_engine import CosyVoice3Engine
+                        tts_engine = CosyVoice3Engine(config=self.config, event_bus=None)
+                        log_info("SPE", "创建 CosyVoice3 引擎进行语音提示", indent=1)
+                    elif tts_engine_name in ("cosyvoice_tts", "cosyvoice"):
+                        from voice_chatbot.tts.cosyvoice_tts_engine import CosyVoiceTTSEngine
+                        tts_engine = CosyVoiceTTSEngine(config=self.config, event_bus=None)
+                        log_info("SPE", "创建 CosyVoice TTS 引擎进行语音提示", indent=1)
+                    else:  # 默认使用 Edge TTS
+                        tts_engine = EdgeTTSEngine(config=self.config, event_bus=None)
+                        log_info("SPE", "创建 Edge TTS 引擎进行语音提示", indent=1)
                 
-                # 根据配置选择TTS引擎
-                tts_engine_name = self.config.get("tts.engine", "edgetts").lower()
-                
-                if tts_engine_name == "melotts":
-                    tts_engine = MeloTTSEngine(config=self.config, event_bus=None)
-                    log_info("SPE", "使用 MeloTTS 引擎进行语音提示", indent=1)
-                elif tts_engine_name == "cosyvoice3":
-                    from voice_chatbot.tts.cosyvoice_engine import CosyVoice3Engine
-                    tts_engine = CosyVoice3Engine(config=self.config, event_bus=None)
-                    log_info("SPE", "使用 CosyVoice3 引擎进行语音提示", indent=1)
-                else:  # 默认使用 Edge TTS
-                    tts_engine = EdgeTTSEngine(config=self.config, event_bus=None)
-                    log_info("SPE", "使用 Edge TTS 引擎进行语音提示", indent=1)
-                
-                audio_player = AudioPlayer(config=self.config, event_bus=None)
+                if hasattr(self, '_audio_player') and self._audio_player is not None:
+                    audio_player = self._audio_player
+                    log_info("SPE", "使用已加载的音频播放器", indent=1)
+                else:
+                    from voice_chatbot.utils.audio_player import AudioPlayer
+                    audio_player = AudioPlayer(config=self.config, event_bus=None)
+                    log_info("SPE", "创建音频播放器", indent=1)
             except Exception as e:
                 log_error("SPE", f"无法创建TTS引擎或音频播放器: {e}")
+                import traceback
+                log_error("SPE", f"异常堆栈: {traceback.format_exc()}", indent=1)
                 return False
             
             # 录制参数
@@ -570,13 +804,15 @@ class SpeakerVerification:
                     
                     # 播放提示音频
                     try:
-                        scene_audio, _, _ = tts_engine.generate(prompt_text, voice=None, return_timing=True)
-                        log_debug("SPE", f"场景{scene_index}提示音频生成完成", indent=1)
+                        log_info("SPE", f"场景{scene_index}生成提示音频...", indent=2)
+                        scene_audio, _, _ = tts_engine.generate(prompt_text, return_timing=True)
+                        log_info("SPE", f"场景{scene_index}提示音频生成完成", indent=2)
                         
                         play_complete = threading.Event()
                         def on_play_complete(was_interrupted, interrupt_reason):
                             play_complete.set()
                         
+                        log_info("SPE", f"场景{scene_index}播放提示音频...", indent=2)
                         if not audio_player.play(scene_audio, task_id=0, on_complete_callback=on_play_complete):
                             log_error("SPE", f"播放场景{scene_index}提示音频失败")
                             return False
@@ -585,9 +821,11 @@ class SpeakerVerification:
                         if not play_complete.is_set():
                             log_warn("SPE", f"播放场景{scene_index}提示音频超时")
                         
-                        log_debug("SPE", f"场景{scene_index}提示音频播放完成", indent=1)
+                        log_info("SPE", f"场景{scene_index}提示音频播放完成", indent=2)
                     except Exception as e:
                         log_error("SPE", f"播放场景{scene_index}提示音频失败: {e}")
+                        import traceback
+                        log_error("SPE", f"异常堆栈: {traceback.format_exc()}", indent=1)
                         return False
                     
                     # 显示要朗读的内容
@@ -625,18 +863,23 @@ class SpeakerVerification:
                         return False
                     
                     # 合并录音数据
+                    log_info("SPE", f"场景{scene_index}合并录音数据，共 {len(recorded_audio)} 个音频块", indent=2)
                     full_audio = np.concatenate(recorded_audio)
+                    log_info("SPE", f"场景{scene_index}录音数据合并完成，总长度: {len(full_audio)/sample_rate:.2f}秒", indent=2)
                     
                     # 使用VAD检测并裁剪头尾静音
+                    log_info("SPE", f"场景{scene_index}使用VAD裁剪音频...", indent=2)
                     trimmed_audio = trim_audio_with_vad(full_audio, sample_rate)
+                    log_info("SPE", f"场景{scene_index}VAD裁剪完成", indent=2)
                     
                     # 使用ASR验证录音内容
                     asr_verified = False
                     try:
+                        log_info("SPE", f"场景{scene_index}开始ASR验证...", indent=2)
                         # 使用传入的ASR模型或加载新模型
                         if self.asr_model is not None:
                             asr_model = self.asr_model
-                            log_debug("SPE", f"场景{scene_index} 使用传入的ASR模型", indent=2)
+                            log_info("SPE", f"场景{scene_index} 使用传入的ASR模型", indent=2)
                         else:
                             from funasr import AutoModel
                             
@@ -646,15 +889,19 @@ class SpeakerVerification:
                                 log_warn("SPE", "ASR模型路径未配置，跳过ASR验证", indent=2)
                                 asr_verified = True  # 如果ASR不可用，跳过验证
                             else:
+                                log_info("SPE", f"场景{scene_index} 正在加载ASR模型: {asr_model_path}", indent=2)
                                 asr_model = AutoModel(model=asr_model_path, device="cuda" if torch.cuda.is_available() else "cpu", disable_pbar=True)
-                                log_debug("SPE", f"场景{scene_index} 加载ASR模型", indent=2)
+                                log_info("SPE", f"场景{scene_index} ASR模型加载完成", indent=2)
                         
                         if not asr_verified:
                             # 将音频转换为int16格式
+                            log_info("SPE", f"场景{scene_index}转换音频格式...", indent=2)
                             audio_int16 = (np.clip(trimmed_audio, -1.0, 1.0) * 32767).astype(np.int16)
                             
                             # 进行ASR识别（不传递cache，确保每次都是全新识别）
+                            log_info("SPE", f"场景{scene_index}开始ASR识别...", indent=2)
                             result = asr_model.generate(input=audio_int16, cache={}, batch_size_s=300, )
+                            log_info("SPE", f"场景{scene_index}ASR识别完成", indent=2)
                             
                             if result and len(result) > 0:
                                 recognized_text = result[0].get('text', '').strip()
@@ -725,10 +972,12 @@ class SpeakerVerification:
                     
                     # 保存音频文件
                     try:
+                        log_info("SPE", f"场景{scene_index}保存音频文件...", indent=2)
                         enroll_dir = Path(self.enroll_audio_path)
                         enroll_dir.mkdir(parents=True, exist_ok=True)
                         
-                        audio_filename = f"scene_{scene_index}.wav"
+                        # 使用文本内容生成文件名（基于文本哈希）
+                        audio_filename = f"{_get_text_filename(reading_text)}.wav"
                         audio_file_path = enroll_dir / audio_filename
                         
                         # 转换为int16格式并保存为WAV
@@ -751,14 +1000,27 @@ class SpeakerVerification:
                     return False
             
             # 遍历所有场景进行录制
+            log_info("SPE", f"开始录制 {len(recording_scenes)} 个场景的音频", indent=1)
             for scene in recording_scenes:
+                log_info("SPE", f"开始录制场景 {scene['index']}: {scene['reading_text']}", indent=1)
                 if not record_scene_audio(scene):
                     log_error("SPE", f"录制场景{scene['index']}失败，声纹注册流程终止")
                     return False
+                log_info("SPE", f"场景 {scene['index']} 录制完成", indent=1)
             
             # 所有场景录制完成
             log_info("SPE", f"所有{len(recorded_files)}个场景录制完成")
             log_info("SPE", f"音频文件保存在: {self.enroll_audio_path}", indent=1)
+            
+            # 录制完成后，立即加载注册音频
+            log_info("SPE", "录制完成，正在加载注册音频...", indent=1)
+            if self._load_enroll_audio():
+                log_info("SPE", f"成功加载 {len(self.enroll_embeddings)} 个注册声纹，声纹验证已启用")
+                self.enabled = True
+                self.enrollment_checked = True
+            else:
+                log_error("SPE", "注册音频加载失败")
+                return False
             
             print("\n" + "="*60)
             print("声纹注册完成！")

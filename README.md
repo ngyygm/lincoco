@@ -8,8 +8,18 @@
 - 🗣️ **多种 TTS 引擎**：支持 Edge TTS、MeloTTS 和 CosyVoice 三种引擎
   - **Edge TTS**：微软 Edge 浏览器的免费 TTS 服务，支持多种语言和音色
   - **MeloTTS**：Myshell 开源的高质量多语言 TTS，支持中、英、日等多种语言
-  - **CosyVoice**：阿里达摩院开源的高质量语音合成，支持流式生成和多场景应用
+  - **CosyVoice**：阿里达摩院开源的高质量语音合成，支持流式生成、多场景应用和3s极速复刻
+    - 3s极速复刻：基于参考音频快速克隆语音，实现个性化音色
+    - 自然音频支持：同一文本可保存多个不同版本，增加语音自然变化
+    - HTTP API调用：通过API服务进行语音合成，支持分布式部署
 - 🔐 **声纹验证**：基于 3D-Speaker 的声纹识别和验证，支持多声纹并行比对、滑动窗口验证、多场景注册
+  - 多声纹支持：支持多个注册音频文件，只要有一个匹配就通过验证
+  - 并行比对：使用张量并行计算所有注册音频的相似度
+  - 滑动窗口：支持滑动窗口模式，提高声纹验证的准确性和灵活性
+  - 多场景录制：支持多场景声纹录制（安静环境、背景噪音、远距离等），提高鲁棒性
+  - 自动注册：首次运行时自动引导用户录制声纹注册音频
+  - 嵌入缓存：支持缓存声纹嵌入向量，提高验证速度
+  - GPU 加速：支持 CUDA 加速声纹验证
   - 多声纹支持：支持多个注册音频文件，只要有一个匹配就通过验证
   - 并行比对：使用张量并行计算所有注册音频的相似度
   - 滑动窗口：支持滑动窗口模式，提高声纹验证的准确性和灵活性
@@ -38,6 +48,11 @@
 - 💾 **TTS 缓存系统**：支持文件缓存和内存缓存，显著提升响应速度
   - **LRU 内存缓存**：减少重复请求，可配置最大缓存大小
   - **持久化文件缓存**：所有生成的 TTS 音频保存到文件，永久缓存
+  - **自然音频支持**：同一文本可保存多个不同版本，增加语音自然变化
+    - 版本数量可配置（如5个版本）
+    - 加载时随机选择一个版本
+    - 仅支持自然音频的引擎可用（如CosyVoice）
+    - 每个文本的多个版本文件使用后缀区分（如`hash_0.mp3`、`hash_1.mp3`等）
   - 按引擎和语音组织：便于管理和清理
   - 自动修复：启动时检查并修复缺失的缓存文件
 
@@ -193,8 +208,8 @@ lincoco/
 │   ├── tts/                        # TTS 模块
 │   │   ├── edge_tts_engine.py      # Edge TTS 引擎
 │   │   ├── melo_tts_engine.py      # MeloTTS 引擎（HTTP API调用）
-│   │   ├── cosyvoice_engine.py     # CosyVoice 引擎
-│   │   ├── tts_file_cache.py       # TTS 文件缓存
+│   │   ├── cosyvoice_tts_engine.py  # CosyVoice 引擎（HTTP API调用，支持3s极速复刻）
+│   │   ├── tts_file_cache.py       # TTS 文件缓存（支持自然音频多版本）
 │   │   └── __init__.py             # 模块初始化
 │   │
 │   └── utils/                      # 工具模块
@@ -242,17 +257,25 @@ llm.max_history_length = 50           # 最大历史记录长度（对话轮数�
 
 #### TTS 配置
 ```python
-tts.default_engine = "melotts"                 # TTS引擎：edge_tts、melo_tts 或 cosyvoice
+tts.default_engine = "cosyvoice_tts"                 # TTS引擎：edge_tts、melo_tts、cosyvoice_tts
 tts.tts_file_cache_enabled = True     # 启用TTS文件缓存
 tts.enable_trim_silence = True        # 启用静音裁剪
+
+# 自然音频配置
+tts.natural_audio_count = 5         # 自然音频数量（0=不启用，>0表示同一文本保存多个版本）
+tts.tts_file_cache_auto_repair = True  # 是否自动修复缺失的缓存文件
 
 # MeloTTS 特定配置
 tts.engines.melo_tts.model_language = "ZH"  # 模型语言：ZH=中文, EN=英文, JP=日文等
 tts.engines.melo_tts.api_url = "http://127.0.0.1:8101"  # API 服务地址
 
-# CosyVoice 特定配置
-tts.engines.cosyvoice.api_url = "http://127.0.0.1:8102"  # API 服务地址（默认端口）
-tts.engines.cosyvoice.inference_mode = "sft"  # 推理模式：sft、zero_shot
+# CosyVoice TTS 特定配置
+tts.engines.cosyvoice_tts.api_url = "http://127.0.0.1:9880"  # API 服务地址
+tts.engines.cosyvoice_tts.reference_wav_path = None  # 参考音频文件路径（用于3s极速复刻）
+tts.engines.cosyvoice_tts.reference_text = None  # 参考文本（可选）
+tts.engines.cosyvoice_tts.use_filename_as_text = True  # 是否使用文件名作为参考文本
+tts.engines.cosyvoice_tts.speed = 1.0  # 语速
+tts.engines.cosyvoice_tts.support_natural_audio = True  # 是否支持自然音频
 ```
 
 #### 声纹验证配置
@@ -321,10 +344,17 @@ asr.no_speech_threshold = 0.4     # 无语音阈值（秒）
 - **文件缓存**：持久化缓存所有生成的 TTS 音频
 - **按引擎分类**：根据不同 TTS 引擎（Edge TTS、MeloTTS、CosyVoice）分别存储
 - **按长度分类**：根据文本长度自动分类存储
+- **自然音频支持**：同一文本可保存多个不同版本，增加语音自然变化
+  - 版本数量可配置（如5个版本）
+  - 加载时随机选择一个版本
+  - 仅支持自然音频的引擎可用（如CosyVoice）
+  - 每个文本的多个版本文件使用后缀区分（如`hash_0.mp3`、`hash_1.mp3`等）
+  - 引擎配置中通过`support_natural_audio`标识是否支持自然音频
 - **缓存命中**：生成前检查缓存，提高响应速度
 - **目录组织**：按语音和长度范围组织缓存文件
   - `cache/tts_cache/edge_tts_cache/` - Edge TTS 缓存
   - `cache/tts_cache/melo_tts_cache/` - MeloTTS 缓存
+  - `cache/tts_cache/cosyvoice_cache/` - CosyVoice 缓存（支持自然音频）
   - 每个引擎目录下按语音名称和长度范围组织
 
 ## 📊 性能特性
