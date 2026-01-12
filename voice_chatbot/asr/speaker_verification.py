@@ -682,7 +682,7 @@ class SpeakerVerification:
                     "prompt": f"请朗读以下内容，第{sentence_num}句开始录音",
                     "instruction": f"请用正常语速朗读以下内容（第 {sentence_num}/{len(self.reading_texts)} 句）：\n",
                     "reading_text": reading_text,
-                    "scenario_hint": f"\n\n（距离麦克风约3-10厘米，正常说话）"
+                    "scenario_hint": f"（距离麦克风约3-10厘米，正常说话）"
                 })
             
             # 获取TTS引擎和音频播放器（优先使用已加载的，否则创建新的）

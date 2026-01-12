@@ -1,74 +1,66 @@
 # ========================================
-# Extra package index URLs
-# ========================================
-# PyTorch CUDA 12.1 version
---extra-index-url https://download.pytorch.org/whl/cu121
-# ONNX Runtime CUDA 12 version
---extra-index-url https://aiinfra.pkgs.visualstudio.com/PublicPackages/_packaging/onnxruntime-cuda-12/pypi/simple/
-
-# ========================================
-# Core dependencies
+# 核心依赖包
 # ========================================
 
-# LLM - OpenAI compatible API
+# LLM - OpenAI 兼容 API
 openai>=1.0.0
 
-# ASR - Automatic Speech Recognition
+# ASR - 语音识别
 funasr
 
-# TTS - Text to Speech
+# TTS - 文本转语音
 edge-tts
 
-# Audio processing
+# 音频处理
 pydub>=0.25.0
-numpy==1.26.4
+numpy>=1.24.0
 
-# Audio capture
+# 音频采集
 pyaudio>=0.2.14
 
-# Audio playback
+# 音频播放
 pygame>=2.5.0
 
-# Language detection (optional, for TTS auto language selection)
-langid==1.1.6
+# 语言检测（可选，用于 TTS 自动语言选择）
+langid>=1.1.0
 
-# Web interface
-gradio==5.4.0
+# Web 界面
+gradio>=3.43.0
 
-# WebSocket server (web real-time voice interaction)
-fastapi==0.115.6
-uvicorn[standard]==0.30.0
+# WebSocket 服务器（网页端实时语音交互）
+fastapi>=0.104.0
+uvicorn[standard]>=0.24.0
 websockets>=12.0
 
-# Configuration management
+# 配置管理
 pyyaml>=6.0.0
 
-# Logging
-loguru==0.7.2
+# 日志
+loguru>=0.7.0
 
-# HTTP client
+# HTTP 客户端
 requests>=2.31.0
 aiohttp>=3.9.0
 
-# Utility libraries
+# 工具库
 tqdm>=4.66.0
 
-# Chinese word segmentation
-jieba==0.42.1
-pypinyin==0.50.0
+# 中文分词
+jieba>=0.42.0
+pypinyin>=0.50.0
 
 gradio
-webrtcvad
-flask
 
+webrtcvad
 # ========================================
-# MeloTTS submodule dependencies (plugin/melotts/requirements.txt)
+# MeloTTS 子模块依赖 (plugin/melotts/requirements.txt)
 # ========================================
-# Note: Need to install torch and torchaudio separately
-# Recommended: pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+# 注意：需要单独安装 torch 和 torchaudio
+# 推荐命令：pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
 
 txtsplit
 cached_path
+transformers==4.51.3
 num2words==0.5.12
 unidic_lite~=1.0.8
 unidic==1.1.0
@@ -80,85 +72,52 @@ anyascii==0.3.2
 jamo==0.4.1
 gruut[de,es,fr]==2.2.3
 g2pkk>=0.1.1
+librosa==0.9.1
+pydub==0.25.1
 eng_to_ipa==0.0.2
-inflect==7.3.1
+inflect==7.0.0
 unidecode==1.3.7
+pypinyin==0.50.0
 cn2an==0.5.22
+jieba==0.42.1
+gradio
+langid==1.1.6
+tqdm
+tensorboard==2.16.2
+loguru==0.7.2
+matplotlib==3.9.2
 
-# ========================================
-# CosyVoice submodule dependencies (plugin/CosyVoice/requirements.txt)
-# ========================================
-# Note: torch and torchaudio versions are specified below
-# Recommended: pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
-
-# Core dependencies
-conformer==0.3.2
-deepspeed==0.15.1; sys_platform == 'linux'
-diffusers==0.29.0
-fastapi-cli==0.0.4
-gdown==5.1.0
-grpcio==1.57.0
-grpcio-tools==1.57.0
-hydra-core==1.3.2
-HyperPyYAML==1.2.2
-librosa==0.10.2
-lightning==2.2.4
-modelscope==1.20.0
-networkx>=2.5.0,<3.0.0
-omegaconf==2.3.0
-onnx==1.16.0
-onnxruntime-gpu==1.18.0; sys_platform == 'linux'
-onnxruntime==1.18.0; sys_platform == 'darwin' or sys_platform == 'win32'
-openai-whisper==20231117
-protobuf==4.25
-pyarrow==18.1.0
-pydantic==2.7.0
-pyworld==0.3.4
-rich==13.7.1
-soundfile==0.12.1
-tensorrt-cu12==10.13.3.9; sys_platform == 'linux'
-tensorrt-cu12-bindings==10.13.3.9; sys_platform == 'linux'
-tensorrt-cu12-libs==10.13.3.9; sys_platform == 'linux'
-torch==2.3.1
-torchaudio==2.3.1
-transformers==4.51.3
-x-transformers==2.11.24
-wetext==0.0.4
-wget==3.2
-
-# ========================================
-# Visualization and monitoring
-# ========================================
+# 可视化和监控
 matplotlib>=3.9.0
 tensorboard>=2.16.0
 
 # ========================================
-# System dependencies
+# 系统依赖说明
 # ========================================
-# The following dependencies require system-level installation:
+# 以下依赖需要系统级别安装：
 
-# 1. ffmpeg - Audio processing tool (required)
+# 1. ffmpeg - 音频处理工具（必需）
 #    Ubuntu/Debian: sudo apt install ffmpeg
 #    CentOS/RHEL: sudo yum install ffmpeg
 #    macOS: brew install ffmpeg
-#    Windows: Download and install ffmpeg
+#    Windows: 下载并安装 ffmpeg
 
-# 2. portaudio - Dependency for pyaudio (required on Linux/macOS)
+# 2. portaudio - pyaudio 的依赖（Linux/macOS 必需）
 #    Ubuntu/Debian: sudo apt install portaudio19-dev python3-dev
 #    CentOS/RHEL: sudo yum install portaudio-devel python3-devel
 #    macOS: brew install portaudio
 
-# 3. mecab - Japanese tokenizer (for MeloTTS Japanese support)
+# 3. mecab - 日语分词（MeloTTS 日语支持）
 #    Ubuntu/Debian: sudo apt install mecab libmecab-dev mecab-ipadic-utf8
 
 # ========================================
-# Installation instructions
+# 安装说明
 # ========================================
-# 1. Install system dependencies
+# 1. 安装系统依赖
 #    sudo apt install ffmpeg portaudio19-dev python3-dev mecab libmecab-dev mecab-ipadic-utf8
 
-# 2. Install PyTorch (CUDA version, choose based on your CUDA version)
+# 2. 安装 PyTorch（CUDA 版本，根据你的 CUDA 版本选择）
 #    pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
 
-# 3. Install Python dependencies
+# 3. 安装 Python 依赖
 #    pip install -r requirements.txt

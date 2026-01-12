@@ -312,37 +312,56 @@ class Config:
         },
     }
 
-    def __init__(self, config_file: Optional[str] = None, auto_export_default_config: bool = True):
+    def __init__(self, config_file: Optional[str] = None):
         """
         初始化配置管理器
 
         Args:
-            config_file: 配置文件路径(JSON格式),如果为None则自动查找config.json
-            auto_export_default_config: 如果config.json不存在,是否自动导出默认配置到项目根目录
+            config_file: 配置文件路径(JSON格式),如果为None则自动使用项目根目录的config.json
         """
         self.config = self.DEFAULT_CONFIG.copy()
-
-        # 如果没有提供config_file，则自动查找
-        if config_file is None:
-            config_file = self._find_config_file()
-
         self.config_file = config_file
 
-        # 加载配置文件
-        if config_file and os.path.exists(config_file):
-            self.load_from_file(config_file)
-        elif auto_export_default_config:
-            # 如果config.json不存在,自动导出默认配置到项目根目录
-            default_config_path = "config.json"
-            if not os.path.exists(default_config_path):
-                print(f"未找到配置文件 {default_config_path}，正在导出默认配置...")
-                self.export_config(default_config_path)
+        # 如果没有指定配置文件，自动使用项目根目录的config.json
+        if config_file is None:
+            # 获取项目根目录(Lincoco目录)
+            project_root = Path(__file__).parent.parent.parent
+            self.config_file = project_root / "config.json"
+
+            # 如果配置文件不存在，自动创建
+            if not os.path.exists(self.config_file):
+                self._save_default_config(self.config_file)
+                print(f"已自动创建配置文件: {self.config_file}")
+            else:
+                # 配置文件存在，加载它
+                self.load_from_file(self.config_file)
+        else:
+            # 使用指定的配置文件
+            if os.path.exists(config_file):
+                self.load_from_file(config_file)
 
         # 从环境变量加载配置(覆盖文件配置)
         self.load_from_env()
 
         # 验证配置
         self.validate()
+
+    def _save_default_config(self, config_file: str):
+        """
+        保存默认配置到文件
+
+        Args:
+            config_file: 配置文件路径
+        """
+        try:
+            # 确保目录存在
+            config_path = Path(config_file)
+            config_path.parent.mkdir(parents=True, exist_ok=True)
+
+            with open(config_file, 'w', encoding='utf-8') as f:
+                json.dump(self.config, f, indent=2, ensure_ascii=False)
+        except Exception as e:
+            print(f"警告：保存默认配置文件失败: {e}，使用默认配置")
 
     def load_from_file(self, config_file: str):
         """
@@ -355,7 +374,7 @@ class Config:
             with open(config_file, 'r', encoding='utf-8') as f:
                 file_config = json.load(f)
 
-            # 深度合并配置
+            # 深度合并配置（文件配置覆盖默认配置，但文件中不存在的参数仍使用默认值）
             self._deep_merge(self.config, file_config)
         except Exception as e:
             print(f"警告：加载配置文件失败: {e}，使用默认配置")
@@ -419,34 +438,6 @@ class Config:
                 self._deep_merge(base[key], value)
             else:
                 base[key] = value
-
-    def _find_config_file(self) -> Optional[str]:
-        """
-        自动查找config.json文件
-
-        查找顺序:
-        1. 当前工作目录
-        2. 项目根目录（Lincoco/）
-        3. voice_chatbot目录
-
-        Returns:
-            找到的配置文件路径，如果未找到则返回None
-        """
-        # 可能的搜索路径
-        search_paths = [
-            "config.json",  # 当前工作目录
-            "voice_chatbot/config.json",  # 项目根目录下的voice_chatbot
-        ]
-
-        # 尝试每个路径
-        for path in search_paths:
-            if os.path.exists(path):
-                print(f"找到配置文件: {os.path.abspath(path)}")
-                return path
-
-        # 未找到配置文件
-        print("未找到config.json文件，使用默认配置")
-        return None
 
     def validate(self):
         """验证配置参数"""
@@ -576,16 +567,6 @@ class Config:
     def get_all(self) -> Dict:
         """获取所有配置"""
         return self.config.copy()
-
-    def export_config(self, output_file: str = "config.json"):
-        """
-        导出当前配置到JSON文件
-
-        Args:
-            output_file: 输出文件路径，默认为config.json
-        """
-        self.save_to_file(output_file)
-        print(f"配置已导出到: {os.path.abspath(output_file)}")
 
     def __getitem__(self, key: str) -> Any:
         """支持字典式访问"""

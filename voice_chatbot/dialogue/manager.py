@@ -268,10 +268,10 @@ class DialogueManager:
         
         log_info("MANAGER", f"[STATE_TRANS-{transition_type.upper()}] {from_state} -> {to_state} | 原因: {reason} | 调用者: {caller_info}", indent=1)
     
-    def initialize_modules(self, skip_microphone: bool = False, skip_audio_player: bool = False):
+    def initialize_modules(self):
         """
         初始化所有模块
-
+        
         包括：
         - EventBus 事件总线处理线程（线程3）
         - MicrophoneRecorder（音频采集）
@@ -281,31 +281,20 @@ class DialogueManager:
         - TTS引擎（EdgeTTS或CosyVoice3）
         - AudioPlayer（音频播放）
         - PersonaManager（人设管理）
-
-        Args:
-            skip_microphone: 是否跳过 MicrophoneRecorder 初始化（用于 Web UI 模式）
-            skip_audio_player: 是否跳过 AudioPlayer 初始化（用于 Web UI 模式）
         """
         log_info("MANAGER", "开始初始化模块...", indent=0)
-        if skip_microphone:
-            log_info("MANAGER", "跳过 MicrophoneRecorder 初始化（Web UI 模式）", indent=0)
-        if skip_audio_player:
-            log_info("MANAGER", "跳过 AudioPlayer 初始化（Web UI 模式）", indent=0)
         
         # 启动事件总线处理线程（线程3）
         self.event_bus.start_processing()
         log_info("MANAGER", "事件总线处理线程已启动", indent=1)
         
-        # 初始化音频采集模块（如果不是 Web UI 模式）
-        if not skip_microphone:
-            from voice_chatbot.utils.microphone import MicrophoneRecorder
-            self.microphone = MicrophoneRecorder(
-                config=self.config,
-                on_audio_data_callback=self._on_audio_data
-            )
-            log_info("MANAGER", "音频采集模块初始化完成", indent=1)
-        else:
-            self.microphone = None
+        # 初始化音频采集模块
+        from voice_chatbot.utils.microphone import MicrophoneRecorder
+        self.microphone = MicrophoneRecorder(
+            config=self.config,
+            on_audio_data_callback=self._on_audio_data
+        )
+        log_info("MANAGER", "音频采集模块初始化完成", indent=1)
         
         # 初始化VAD模块
         from voice_chatbot.asr.webrtc_vad import WebRTCVAD
@@ -455,21 +444,18 @@ class DialogueManager:
             self.tts_engine = EdgeTTSEngine(config=self.config, event_bus=self.event_bus)
             log_info("MANAGER", f"TTS引擎初始化完成 ({tts_engine_type})", indent=1)
         
-        # 初始化音频播放器（如果不是 Web UI 模式）
-        if not skip_audio_player:
-            # 注意：AudioPlayer需要task_lock，但在v3.0架构中我们使用TaskContext
-            # 为了兼容，创建一个锁，但实际检查任务取消时使用get_current_task_id
-            import threading
-            player_task_lock = threading.Lock()
-            self.audio_player = AudioPlayer(
-                config=self.config,
-                task_lock=player_task_lock,  # AudioPlayer内部需要锁
-                get_current_task_id=lambda: self.context_manager.get_current_task_id(),
-                event_bus=self.event_bus
-            )
-            log_info("MANAGER", "音频播放器初始化完成", indent=1)
-        else:
-            self.audio_player = None
+        # 初始化音频播放器
+        # 注意：AudioPlayer需要task_lock，但在v3.0架构中我们使用TaskContext
+        # 为了兼容，创建一个锁，但实际检查任务取消时使用get_current_task_id
+        import threading
+        player_task_lock = threading.Lock()
+        self.audio_player = AudioPlayer(
+            config=self.config,
+            task_lock=player_task_lock,  # AudioPlayer内部需要锁
+            get_current_task_id=lambda: self.context_manager.get_current_task_id(),
+            event_bus=self.event_bus
+        )
+        log_info("MANAGER", "音频播放器初始化完成", indent=1)
         
         # 设置事件订阅
         self._setup_event_subscriptions()
