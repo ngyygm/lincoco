@@ -303,12 +303,17 @@ def main():
     
     args = parser.parse_args()
     
-    # 初始化日志系统
-    log_file_enabled = not args.no_log_file
+    # 先加载配置（用于初始化日志系统）
+    config = Config(config_file=args.config)
+    
+    # 从配置初始化日志系统
+    # 完全由 filtered_levels 控制输出，配置了什么级别就输出什么级别
+    log_file_enabled = config.get("logging.file_enabled", False)
+    log_dir = config.get("logging.log_dir", "cache/logs")
     init_logger(
-        log_level=args.log_level,
         log_file_enabled=log_file_enabled,
-        log_dir=args.log_dir
+        log_dir=log_dir,
+        config=config
     )
     
     log_info("MAIN", "=" * 60, indent=0)
@@ -316,9 +321,8 @@ def main():
     log_info("MAIN", "=" * 60, indent=0)
     
     try:
-        # 加载配置
-        log_info("MAIN", "加载配置...", indent=0)
-        config = Config(config_file=args.config)
+        # 配置已加载，记录配置信息
+        log_info("MAIN", "配置已加载", indent=0)
         if args.config:
             log_info("MAIN", f"配置文件: {args.config}", indent=1)
         else:
@@ -351,9 +355,30 @@ def main():
             # Windows下可以注册SIGBREAK（Ctrl+Break）
             signal.signal(signal.SIGBREAK, signal_handler)
         
+
+        # 检查并执行声纹注册（如果启用且需要）
+        # 在问候语播放后执行，确保系统已完全启动
+        if dialogue_manager.asr and hasattr(dialogue_manager.asr, 'speaker_verification') and dialogue_manager.asr.speaker_verification:
+            log_info("MAIN", "检查声纹注册状态...", indent=0)
+            try:
+                # 使用已加载的ASR模型、TTS引擎和音频播放器
+                dialogue_manager.asr.speaker_verification.check_and_enroll_if_needed(
+                    asr_model=dialogue_manager.asr.asr_model if hasattr(dialogue_manager.asr, 'asr_model') else None,
+                    tts_engine=dialogue_manager.tts_engine,
+                    audio_player=dialogue_manager.audio_player
+                )
+            except Exception as e:
+                log_error("MAIN", f"声纹注册检查失败: {e}", indent=1)
+                import traceback
+                log_error("MAIN", f"异常堆栈: {traceback.format_exc()}", indent=1)
+
+
+        
         # 启动系统
         log_info("MAIN", "启动系统...（按 Ctrl+C 退出）", indent=0)
         dialogue_manager.start()
+
+
 
         # 处理问候语
         greeting_config = config.get("system.greeting", {})
@@ -380,6 +405,8 @@ def main():
                     log_error("MAIN", f"问候语播放出错: {e}", indent=1)
                     import traceback
                     log_error("MAIN", f"异常堆栈:\n{traceback.format_exc()}", indent=1)
+        
+      
         
         # 保持主线程运行
         # 注意：KeyboardInterrupt会被SIGINT信号处理器捕获

@@ -255,23 +255,20 @@ def get_caller_source():
 class Logger:
     """日志系统类"""
     
-    def __init__(self, log_level='INFO', log_file_enabled=True, log_dir='logs', 
+    def __init__(self, log_file_enabled=True, log_dir='logs', 
                  filtered_levels=None, filtered_categories=None, category_colors=None,
                  show_source=True):
         """
         初始化日志系统
         
         Args:
-            log_level: 日志级别 (DEBUG, INFO, WARN, ERROR)
             log_file_enabled: 是否启用文件输出
             log_dir: 日志文件目录
-            filtered_levels: 被过滤的日志级别列表（黑名单），如 ["DEBUG"]
-            filtered_categories: 被过滤的日志类别列表（黑名单），如 ["EVENT", "VAD"]
+            filtered_levels: 允许输出的日志级别列表（白名单），如 ["INFO", "DEBUG"]
+            filtered_categories: 允许输出的日志类别列表（白名单），如 ["ASR", "TTS", "LLM"]
             category_colors: 日志类别专属颜色字典，格式如 {"ASR": "GREEN", "LLM": "CYAN"}
             show_source: 是否显示代码来源前缀（文件名），默认为True
         """
-        self.log_level = log_level.upper()
-        self.log_level_num = LOG_LEVELS.get(self.log_level, LOG_LEVELS['INFO'])
         self.log_file_enabled = log_file_enabled
         self.log_dir = Path(log_dir)
         self.current_log_file = None
@@ -279,7 +276,7 @@ class Logger:
         self._lock = threading.Lock()
         self.show_source = show_source
         
-        # 过滤配置（黑名单）
+        # 过滤配置（白名单）
         self.filtered_levels = set(level.upper() for level in (filtered_levels or []))
         self.filtered_categories = set(category.upper() for category in (filtered_categories or []))
         
@@ -314,21 +311,17 @@ class Logger:
             self.log_file_handle = open(log_file, 'a', encoding='utf-8')
     
     def set_level(self, level):
-        """设置日志级别"""
-        level_upper = level.upper()
-        if level_upper in LOG_LEVELS:
-            self.log_level = level_upper
-            self.log_level_num = LOG_LEVELS[level_upper]
-        else:
-            self.warn("LOGGER", f"无效的日志级别: {level}，保持当前级别: {self.log_level}")
+        """设置日志级别（已废弃，使用 filtered_levels 控制输出）"""
+        # 此方法已废弃，不再使用 log_level 阈值过滤
+        pass
     
     def update_filter(self, filtered_levels=None, filtered_categories=None):
         """
         更新过滤配置
         
         Args:
-            filtered_levels: 被过滤的日志级别列表（黑名单），如 ["DEBUG"]
-            filtered_categories: 被过滤的日志类别列表（黑名单），如 ["EVENT", "VAD"]
+            filtered_levels: 允许输出的日志级别列表（白名单），如 ["INFO", "DEBUG"]
+            filtered_categories: 允许输出的日志类别列表（白名单），如 ["ASR", "TTS", "LLM"]
         """
         if filtered_levels is not None:
             self.filtered_levels = set(level.upper() for level in filtered_levels)
@@ -353,13 +346,13 @@ class Logger:
         if self.filtered_levels and level_upper not in self.filtered_levels:
             return False
         
-        # 检查类别过滤（黑名单：在 filtered_categories 中的类别不输出）
-        if category and category.upper() in self.filtered_categories:
+        # 检查类别过滤（白名单：只输出在 filtered_categories 中的类别）
+        # 如果 filtered_categories 不为空，则只有在该列表中的类别才输出
+        if category and self.filtered_categories and category.upper() not in self.filtered_categories:
             return False
         
-        # 检查级别阈值（只输出指定级别及以上的日志）
-        level_num = LOG_LEVELS.get(level_upper, LOG_LEVELS['INFO'])
-        return level_num >= self.log_level_num
+        # 完全由 filtered_levels 和 filtered_categories 控制输出
+        return True
     
     def log(self, level, category, message, indent=0, show_thread=True, inline=False, color=None, source=None):
         """
@@ -479,17 +472,16 @@ _global_logger = None
 _logger_lock = threading.Lock()
 
 
-def init_logger(log_level='INFO', log_file_enabled=True, log_dir='logs',
+def init_logger(log_file_enabled=True, log_dir='logs',
                 filtered_levels=None, filtered_categories=None, config=None):
     """
     初始化全局日志实例（使用配置）
     
     Args:
-        log_level: 日志级别 (DEBUG, INFO, WARN, ERROR)
         log_file_enabled: 是否启用文件输出
         log_dir: 日志文件目录
-        filtered_levels: 被过滤的日志级别列表（黑名单）
-        filtered_categories: 被过滤的日志类别列表（黑名单）
+        filtered_levels: 允许输出的日志级别列表（白名单），如 ["INFO", "DEBUG"]
+        filtered_categories: 允许输出的日志类别列表（白名单），如 ["ASR", "TTS", "LLM"]
         config: 配置对象（可选），如果提供则从中读取过滤参数和类别颜色配置
     """
     global _global_logger
@@ -511,7 +503,6 @@ def init_logger(log_level='INFO', log_file_enabled=True, log_dir='logs',
     with _logger_lock:
         if _global_logger is None:
             _global_logger = Logger(
-                log_level=log_level, 
                 log_file_enabled=log_file_enabled, 
                 log_dir=log_dir,
                 filtered_levels=filtered_levels,

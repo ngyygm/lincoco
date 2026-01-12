@@ -156,6 +156,14 @@ class EdgeTTSEngine:
         tts_file_cache_max_length = config.get("tts.tts_file_cache_max_length", 30)
         self.tts_file_cache_auto_repair = config.get("tts.tts_file_cache_auto_repair", False)
         
+        # 自然音频配置
+        # 从总配置读取natural_audio_count，从引擎配置读取support_natural_audio
+        # 如果引擎不支持自然音频，即使总配置>0，也使用0
+        natural_audio_count = config.get("tts.natural_audio_count", 0)
+        support_natural_audio = config.get("tts.engines.edge_tts.support_natural_audio", False)
+        if not support_natural_audio:
+            natural_audio_count = 0
+        
         # 初始化TTS文件缓存（扩展到所有句子）
         # 如果路径是绝对路径，直接使用；如果是相对路径，则相对于项目根目录（voice_chatbot的父目录）
         if not os.path.isabs(tts_file_cache_dir):
@@ -168,7 +176,8 @@ class EdgeTTSEngine:
             cache_dir=str(tts_file_cache_dir),
             enabled=self.tts_file_cache_enabled,
             max_length=tts_file_cache_max_length,
-            engine_name="edge_tts"
+            engine_name="edge_tts",
+            natural_audio_count=natural_audio_count
         ) if self.tts_file_cache_enabled else None
         
         # 事件循环管理

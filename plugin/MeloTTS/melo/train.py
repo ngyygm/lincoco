@@ -58,26 +58,36 @@ def run():
     # 获取超参数
     hps = utils.get_hparams()
     
-    # 获取本地进程的rank
+    # 获取本地进程的rank和分布式训练参数
     local_rank = int(os.environ.get("LOCAL_RANK", 0))
-    # 如果没有初始化分布式训练，则初始化
-    if not torch.distributed.is_initialized():
+    rank = int(os.environ.get("RANK", 0))
+    world_size = int(os.environ.get("WORLD_SIZE", 1))
+    master_addr = os.environ.get("MASTER_ADDR", "127.0.0.1")
+    master_port = os.environ.get("MASTER_PORT", "29500")
+    
+    # 检查是否启用分布式训练
+    use_distributed = world_size > 1 or os.environ.get("USE_DISTRIBUTED", "0") == "1"
+    
+    # 初始化分布式训练
+    if use_distributed and not torch.distributed.is_initialized():
+        print(f"Initializing distributed training with world_size={world_size}")
+        # 对于多GPU训练使用env方法
         dist.init_process_group(
             backend='gloo',
             init_method='env://',
-            rank=0, 
-            world_size=1  # 设置为单机训练
+            rank=rank,
+            world_size=world_size
         )
+        print("Distributed training initialized successfully")
+    elif not use_distributed:
+        print("Running in single-GPU mode (distributed training disabled)")
+        rank = 0
+        n_gpus = 1
     else:
-        dist.init_process_group(
-            backend="gloo",
-            init_method="env://",  # Due to some training problem,we proposed to use gloo instead of nccl.
-            rank=local_rank,
-        )  # Use torchrun instead of mp.spawn
-    # 获取当前进程的rank
-    rank = dist.get_rank()
-    # 获取总的进程数
-    n_gpus = dist.get_world_size()
+        # 如果已经初始化，不再重新初始化
+        print("Distributed training already initialized")
+        rank = dist.get_rank()
+        n_gpus = dist.get_world_size()
     
     # 设置随机种子
     torch.manual_seed(hps.train.seed)
@@ -96,30 +106,56 @@ def run():
     print(f"hps.data.training_files={hps.data.training_files}")
     # 加载训练数据集
     train_dataset = TextAudioSpeakerLoader(hps.data.training_files, hps.data)
-    # 定义训练数据集的采样器
-    train_sampler = DistributedBucketSampler(
-        train_dataset,
-        hps.train.batch_size,
-        [32, 300, 400, 500, 600, 700, 800, 900, 1000],
-        num_replicas=n_gpus,
-        rank=rank,
-        shuffle=True,
-    )
+    
     # 定义数据集的合并函数
     collate_fn = TextAudioSpeakerCollate()
-    # 定义训练数据集的加载器
-    train_loader = DataLoader(
-        train_dataset,
-        num_workers=16,
-        shuffle=False,
-        pin_memory=True,
-        collate_fn=collate_fn,
-        batch_sampler=train_sampler,
-        persistent_workers=True,
-        prefetch_factor=4,
-    )  # DataLoader config could be adjusted.
-    # 如果rank等于0，则加载验证集
-    if rank == 0:
+    
+    # 根据是否使用分布式训练选择采样器
+    if use_distributed:
+        # 定义训练数据集的采样器（分布式模式）
+        train_sampler = DistributedBucketSampler(
+            train_dataset,
+            hps.train.batch_size,
+            [32, 300, 400, 500, 600, 700, 800, 900, 1000],
+            num_replicas=n_gpus,
+            rank=rank,
+            shuffle=True,
+        )
+        # 定义训练数据集的加载器
+        train_loader = DataLoader(
+            train_dataset,
+            num_workers=16,
+            shuffle=False,
+            pin_memory=True,
+            collate_fn=collate_fn,
+            batch_sampler=train_sampler,
+            persistent_workers=True,
+            prefetch_factor=4,
+        )  # DataLoader config could be adjusted.
+    else:
+        # 非分布式模式使用 DistributedBucketSampler 但 num_replicas=1, rank=0
+        train_sampler = DistributedBucketSampler(
+            train_dataset,
+            hps.train.batch_size,
+            [32, 300, 400, 500, 600, 700, 800, 900, 1000],
+            num_replicas=1,
+            rank=0,
+            shuffle=True,
+        )
+        # 定义训练数据集的加载器
+        train_loader = DataLoader(
+            train_dataset,
+            num_workers=16,
+            shuffle=False,
+            pin_memory=True,
+            collate_fn=collate_fn,
+            batch_sampler=train_sampler,
+            persistent_workers=True,
+            prefetch_factor=4,
+        )
+    
+    # 加载验证集（仅在rank 0或非分布式模式下）
+    if not use_distributed or rank == 0:
         eval_dataset = TextAudioSpeakerLoader(hps.data.validation_files, hps.data)
         # 创建验证集的DataLoader
         eval_loader = DataLoader(
@@ -131,6 +167,8 @@ def run():
             drop_last=False,
             collate_fn=collate_fn,
         )
+    else:
+        eval_loader = None
     # 如果模型参数中包含use_noise_scaled_mas，并且其值为True，则使用噪声缩放MAS
     if (
         "use_noise_scaled_mas" in hps.model.keys()
@@ -216,8 +254,18 @@ def run():
     else:
         optim_dur_disc = None  # 如果不存在时长判别器，优化器为None
     # 将生成器网络和判别器网络移动到指定设备
-    net_g = DDP(net_g, device_ids=[rank], find_unused_parameters=True)
-    net_d = DDP(net_d, device_ids=[rank], find_unused_parameters=True)
+    # 根据是否使用分布式训练决定是否使用DDP包装
+    if use_distributed:
+        net_g = DDP(net_g, device_ids=[rank], find_unused_parameters=True)
+        net_d = DDP(net_d, device_ids=[rank], find_unused_parameters=True)
+        if net_dur_disc is not None:
+            net_dur_disc = DDP(net_dur_disc, device_ids=[rank], find_unused_parameters=True)
+    else:
+        # 非分布式模式，直接使用 .cuda()
+        net_g = net_g.cuda(rank)
+        net_d = net_d.cuda(rank)
+        if net_dur_disc is not None:
+            net_dur_disc = net_dur_disc.cuda(rank)
     
     # 加载预训练模型
     pretrain_G, pretrain_D, pretrain_dur = load_pretrain_model()
@@ -245,7 +293,6 @@ def run():
 
     # 如果存在时长判别器，加载预训练模型
     if net_dur_disc is not None:
-        net_dur_disc = DDP(net_dur_disc, device_ids=[rank], find_unused_parameters=True)
         if hps.pretrain_dur:
             utils.load_checkpoint(
                     hps.pretrain_dur,
@@ -326,9 +373,9 @@ def run():
 
     # 遍历每个epoch
     for epoch in range(epoch_str, hps.train.epochs + 1):
-        # 如果当前进程是主进程
+        # 如果当前进程是主进程（或非分布式模式）
         try:
-            if rank == 0:
+            if not use_distributed or rank == 0:
                 # 调用train_and_evaluate函数进行训练和评估
                 train_and_evaluate(
                     rank,
@@ -341,8 +388,9 @@ def run():
                     [train_loader, eval_loader],
                     logger,
                     [writer, writer_eval],
+                    use_distributed,
                 )
-            # 如果当前进程不是主进程
+            # 如果当前进程不是主进程（分布式模式）
             else:
                 # 调用train_and_evaluate函数进行训练，但不进行评估
                 train_and_evaluate(
@@ -356,6 +404,7 @@ def run():
                     [train_loader, None],
                     None,
                     None,
+                    use_distributed,
                 )
         # 捕获异常
         except Exception as e:
@@ -374,7 +423,7 @@ def run():
 
 
 def train_and_evaluate(
-    rank, epoch, hps, nets, optims, schedulers, scaler, loaders, logger, writers
+    rank, epoch, hps, nets, optims, schedulers, scaler, loaders, logger, writers, use_distributed=True
 ):
     net_g, net_d, net_dur_disc = nets
     optim_g, optim_d, optim_dur_disc = optims
@@ -386,6 +435,16 @@ def train_and_evaluate(
     # 设置batch_sampler的epoch
     train_loader.batch_sampler.set_epoch(epoch)
     global global_step
+    
+    # 定义辅助函数，用于获取实际模型（去掉DDP包装）
+    def get_model(model):
+        """获取实际模型，如果是DDP包装则返回.module"""
+        return model.module if use_distributed and isinstance(model, torch.nn.parallel.DistributedDataParallel) else model
+    
+    # 获取实际模型
+    net_g_real = get_model(net_g)
+    net_d_real = get_model(net_d)
+    net_dur_disc_real = get_model(net_dur_disc) if net_dur_disc is not None else None
 
     # 将网络设置为训练模式
     net_g.train()
@@ -407,12 +466,12 @@ def train_and_evaluate(
         ja_bert,
     ) in enumerate(tqdm(train_loader)):
         # 如果使用噪声缩放，则更新噪声缩放值
-        if net_g.module.use_noise_scaled_mas:
+        if net_g_real.use_noise_scaled_mas:
             current_mas_noise_scale = (
-                net_g.module.mas_noise_scale_initial
-                - net_g.module.noise_scale_delta * global_step
+                net_g_real.mas_noise_scale_initial
+                - net_g_real.noise_scale_delta * global_step
             )
-            net_g.module.current_mas_noise_scale = max(current_mas_noise_scale, 0.0)
+            net_g_real.current_mas_noise_scale = max(current_mas_noise_scale, 0.0)
         # 将数据移动到GPU上
         x, x_lengths = x.cuda(rank, non_blocking=True), x_lengths.cuda(
             rank, non_blocking=True
@@ -639,7 +698,7 @@ def train_and_evaluate(
             # 每隔hps.train.eval_interval步数，进行一次评估
             if global_step % hps.train.eval_interval == 0:
                 # 评估模型
-                evaluate(hps, net_g, eval_loader, writer_eval)
+                evaluate(hps, net_g, eval_loader, writer_eval, use_distributed)
                 # 保存生成器模型的checkpoint
                 utils.save_checkpoint(
                     net_g,
@@ -686,9 +745,11 @@ def train_and_evaluate(
     torch.cuda.empty_cache()
 
 
-def evaluate(hps, generator, eval_loader, writer_eval):
+def evaluate(hps, generator, eval_loader, writer_eval, use_distributed=True):
+    # 获取实际生成器模型
+    generator_real = generator.module if use_distributed and isinstance(generator, torch.nn.parallel.DistributedDataParallel) else generator
     # 将生成器设置为评估模式
-    generator.eval()
+    generator_real.eval()
     # 初始化图像和音频字典
     image_dict = {}
     audio_dict = {}
@@ -722,7 +783,7 @@ def evaluate(hps, generator, eval_loader, writer_eval):
             # 遍历使用SDP的两种情况
             for use_sdp in [True, False]:
                 # 使用生成器进行推理
-                y_hat, attn, mask, *_ = generator.module.infer(
+                y_hat, attn, mask, *_ = generator_real.infer(
                     x,
                     x_lengths,
                     speakers,

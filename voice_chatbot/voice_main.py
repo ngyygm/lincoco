@@ -82,7 +82,6 @@ def main():
     # 初始化日志系统
     log_file_enabled = not args.no_log_file
     init_logger(
-        log_level=args.log_level,
         log_file_enabled=log_file_enabled,
         log_dir=args.log_dir
     )

@@ -5,9 +5,30 @@ from typing import Optional
 
 from tqdm import tqdm
 import click
-from text.cleaner import clean_text_bert
 import os
 import torch
+
+# Ensure NLTK resources are available (needed for g2p_en)
+try:
+    import nltk
+    # Check and download required NLTK resources
+    required_resources = [
+        'taggers/averaged_perceptron_tagger_eng',
+        'tokenizers/punkt',
+    ]
+    for resource in required_resources:
+        try:
+            nltk.data.find(resource)
+        except LookupError:
+            resource_name = resource.split('/')[-1]
+            print(f"Downloading NLTK resource: {resource_name}...")
+            nltk.download(resource_name, quiet=True)
+            print(f"NLTK resource {resource_name} downloaded successfully.")
+except Exception as e:
+    print(f"Warning: Could not setup NLTK resources: {e}")
+    print("You may need to manually run: python -m nltk.downloader averaged_perceptron_tagger_eng punkt")
+
+from text.cleaner import clean_text_bert
 from text.symbols import symbols, num_languages, num_tones
 
 @click.command()

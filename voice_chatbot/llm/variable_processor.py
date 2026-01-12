@@ -58,7 +58,7 @@ class VariableProcessor:
         """获取用户名（从配置读取）"""
         if self.config:
             try:
-                user_name = self.config.get("llm.user_name", "用户")
+                user_name = self.config.get("system.user_name", "用户")
                 return user_name if user_name else "用户"
             except Exception as e:
                 log_warn("VAR", f"获取用户名失败: {e}，使用默认值", indent=1)

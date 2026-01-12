@@ -419,6 +419,25 @@ class DialogueManager:
                 self.tts_engine = EdgeTTSEngine(config=self.config, event_bus=self.event_bus)
                 self.tts_engine_type = "edge_tts"
                 log_info("MANAGER", "TTS引擎初始化完成 (edge_tts)", indent=1)
+        # 处理 CosyVoice TTS 引擎（通过HTTP API调用）
+        elif tts_engine_type in ("cosyvoice_tts", "cosyvoice"):
+            try:
+                from voice_chatbot.tts import CosyVoiceTTSEngine, HAS_COSYVOICE_TTS
+                if HAS_COSYVOICE_TTS:
+                    self.tts_engine = CosyVoiceTTSEngine(config=self.config, event_bus=self.event_bus)
+                    log_info("MANAGER", f"TTS引擎初始化完成 ({tts_engine_type})", indent=1)
+                else:
+                    log_warn("MANAGER", "CosyVoice TTS模块未安装，使用EdgeTTS", indent=1)
+                    from voice_chatbot.tts.edge_tts_engine import EdgeTTSEngine
+                    self.tts_engine = EdgeTTSEngine(config=self.config, event_bus=self.event_bus)
+                    self.tts_engine_type = "edge_tts"
+                    log_info("MANAGER", "TTS引擎初始化完成 (edge_tts)", indent=1)
+            except ImportError:
+                log_warn("MANAGER", "CosyVoice TTS模块导入失败，使用EdgeTTS", indent=1)
+                from voice_chatbot.tts.edge_tts_engine import EdgeTTSEngine
+                self.tts_engine = EdgeTTSEngine(config=self.config, event_bus=self.event_bus)
+                self.tts_engine_type = "edge_tts"
+                log_info("MANAGER", "TTS引擎初始化完成 (edge_tts)", indent=1)
         # 默认使用 EdgeTTS
         else:
             from voice_chatbot.tts.edge_tts_engine import EdgeTTSEngine

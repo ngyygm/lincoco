@@ -282,6 +282,7 @@ class FunASRStream:
             try:
                 # 先创建SpeakerVerification（传入asr_model=None，会在模型加载后设置）
                 self.speaker_verification = SpeakerVerification(config, asr_model=None)
+                log_info("ASR", f"声纹验证器初始化成功")
             except Exception as e:
                 log_warn("ASR", f"声纹验证器初始化失败: {e}，将禁用声纹锁功能")
                 self.speaker_verification = None
@@ -294,6 +295,7 @@ class FunASRStream:
         self.sv_sliding_window_enabled = config.get("asr.speaker_verification.sliding_window.enabled", True)
         self.sv_window_length = config.get("asr.speaker_verification.sliding_window.window_length", 1.0)
         self.sv_window_stride = config.get("asr.speaker_verification.sliding_window.window_stride", 0.5)
+        self.sv_consecutive_hits = config.get("asr.speaker_verification.sliding_window.consecutive_hits", 3)  # 连续命中次数
         
         # 预加载模型（如果配置启用）
         self.preload_model = config.get("asr.preload_model", True)
@@ -593,11 +595,13 @@ class FunASRStream:
                 window_stride = self.sv_window_stride if self.sv_sliding_window_enabled else 0
                 window_samples = int(window_length * self.sample_rate)
                 stride_samples = int(window_stride * self.sample_rate)
+                consecutive_hits_required = self.sv_consecutive_hits if self.sv_sliding_window_enabled else 1
                 
-                log_debug("ASR", f"启用声纹 {'滑动窗口' if self.sv_sliding_window_enabled else '固定窗口'}验证 - 窗口长度: {window_length}秒" + 
-                          (f", 滑动步长: {window_stride}秒" if self.sv_sliding_window_enabled else ""))
+                log_debug("ASR", f"启用声纹 {'滑动窗口' if self.sv_sliding_window_enabled else '固定窗口'}验证 - 窗口长度: {window_length}秒" + (f", 滑动步长: {window_stride}秒, 连续命中次数: {consecutive_hits_required}" if self.sv_sliding_window_enabled else ""))
                 
                 verification_complete = False
+                consecutive_hits = 0  # 连续命中计数
+                first_hit_position = None  # 第一次通过的声纹位置（在buffer中的起始位置）
                 
                 # 声纹验证循环
                 while not verification_complete:
@@ -616,35 +620,78 @@ class FunASRStream:
                     
                     # 当缓冲区有足够的音频时进行验证
                     while len(buffer) >= window_samples:
-                        # 取窗口长度的音频进行验证
-                        window_audio = buffer[-window_samples:]
+                        # 从buffer末尾往前取window_samples长度的音频进行验证
+                        window_start = len(buffer) - window_samples
+                        window_audio = buffer[window_start:]
                         
                         # 进行声纹验证
                         is_match, similarity = self.speaker_verification.verify(window_audio, self.sample_rate)
                         
                         if is_match:
-                            # 验证通过
-                            self.speaker_verified = True
-                            verification_complete = True
-                            log_debug("ASR", f"声纹验证通过，相似度: {similarity:.4f}")
+                            # 验证通过，增加连续命中计数
+                            consecutive_hits += 1
                             
-                            # 保留验证通过的窗口开始的所有音频用于ASR识别
-                            # 注意：验证通过的窗口音频也要用于ASR，所以不能丢弃
-                            # buffer 保持当前状态，继续处理
-                            break
-                        else:
-                            # 验证失败
-                            log_debug("ASR", f"声纹验证未通过，相似度: {similarity:.4f}")
+                            # 记录第一次通过的声纹位置
+                            if first_hit_position is None:
+                                first_hit_position = window_start
+                                log_debug("ASR", f"第一次声纹验证通过，相似度: {similarity:.4f}, 位置: {window_start}采样点 ({window_start/self.sample_rate:.2f}秒)")
                             
-                            if self.sv_sliding_window_enabled:
-                                # 滑动窗口模式：向后滑动
-                                buffer = buffer[-stride_samples:]
+                            log_debug("ASR", f"声纹验证通过 ({consecutive_hits}/{consecutive_hits_required})，相似度: {similarity:.4f}")
+                            
+                            # 检查是否达到连续命中次数要求
+                            if consecutive_hits >= consecutive_hits_required:
+                                # 达到连续命中次数要求，验证完成
+                                self.speaker_verified = True
+                                verification_complete = True
+                                log_debug("ASR", f"连续{consecutive_hits}次声纹验证通过，开始正式识别")
                                 
-                                # 滑动后检查剩余音频是否足够
+                                # 从第一次通过的声纹位置开始记录音频数据流
+                                if first_hit_position is not None and first_hit_position > 0:
+                                    buffer = buffer[first_hit_position:]
+                                    log_debug("ASR", f"从第一次通过的声纹位置开始记录音频，保留 {len(buffer)} 采样点 ({len(buffer)/self.sample_rate:.2f}秒)", indent=1)
+                                
+                                break
+                            else:
+                                # 未达到连续命中次数，继续滑动验证（保持连续命中计数）
+                                if self.sv_sliding_window_enabled and stride_samples > 0:
+                                    # 滑动窗口模式：向后滑动一个步长
+                                    # 保留从第一次命中位置（如果有）或当前窗口开始位置往后的所有音频
+                                    if first_hit_position is not None:
+                                        # 保留从第一次命中位置往后的所有音频
+                                        buffer = buffer[first_hit_position:]
+                                    else:
+                                        # 还没有第一次命中，滑动stride_samples
+                                        if len(buffer) > stride_samples:
+                                            buffer = buffer[-stride_samples:]
+                                    
+                                    # 检查剩余音频是否足够继续验证
+                                    if len(buffer) < window_samples:
+                                        break
+                                    # 继续循环，从新位置验证
+                                else:
+                                    # 固定窗口模式或步长为0：只验证一次，通过则完成
+                                    self.speaker_verified = True
+                                    verification_complete = True
+                                    break
+                        else:
+                            # 验证失败，重置连续命中计数
+                            consecutive_hits = 0
+                            first_hit_position = None
+                            log_debug("ASR", f"声纹验证未通过，相似度: {similarity:.4f}，重置连续命中计数")
+                            
+                            if self.sv_sliding_window_enabled and stride_samples > 0:
+                                # 滑动窗口模式：向后滑动一个步长
+                                if len(buffer) > stride_samples:
+                                    buffer = buffer[-stride_samples:]
+                                else:
+                                    buffer = buffer
+                                
+                                # 检查剩余音频是否足够继续验证
                                 if len(buffer) < window_samples:
                                     break
+                                # 继续循环，从新位置验证
                             else:
-                                # 固定窗口模式：只验证一次，失败则退出
+                                # 固定窗口模式或步长为0：只验证一次，失败则退出
                                 break
                     
                     # 如果验证完成，退出循环

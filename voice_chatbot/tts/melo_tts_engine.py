@@ -159,6 +159,14 @@ class MeloTTSEngine:
         tts_file_cache_max_length = config.get("tts.tts_file_cache_max_length", 30)
         self.tts_file_cache_auto_repair = config.get("tts.tts_file_cache_auto_repair", False)
         
+        # 自然音频配置
+        # 从总配置读取natural_audio_count，从引擎配置读取support_natural_audio
+        # 如果引擎不支持自然音频，即使总配置>0，也使用0
+        natural_audio_count = config.get("tts.natural_audio_count", 0)
+        support_natural_audio = config.get("tts.engines.melo_tts.support_natural_audio", False)
+        if not support_natural_audio:
+            natural_audio_count = 0
+        
         # 初始化TTS文件缓存（扩展到所有句子）
         # 如果路径是绝对路径，直接使用；如果是相对路径，则相对于项目根目录（voice_chatbot的父目录）
         if not os.path.isabs(tts_file_cache_dir):
@@ -171,7 +179,8 @@ class MeloTTSEngine:
             cache_dir=str(tts_file_cache_dir),
             enabled=self.tts_file_cache_enabled,
             max_length=tts_file_cache_max_length,
-            engine_name="melo_tts"
+            engine_name="melo_tts",
+            natural_audio_count=natural_audio_count
         ) if self.tts_file_cache_enabled else None
         
         # HTTP会话（复用连接）
@@ -180,7 +189,7 @@ class MeloTTSEngine:
         # 初始化模型（加载指定语言的模型）
         self._init_model()
         
-        self._publish_log("DEBUG", f"MeloTTS引擎初始化完成 [API: {self.api_url}{self.api_endpoint}, 模型语言: {self.model_language}, 缓存: {'启用' if self.cache_enabled else '禁用'}, 文件缓存: {'启用' if self.tts_file_cache_enabled else '禁用'}, 自动修复: {'启用' if self.tts_file_cache_auto_repair else '禁用'}]")
+        log_debug("TTS", f"MeloTTS引擎初始化完成 [API: {self.api_url}{self.api_endpoint}, 模型语言: {self.model_language}, 缓存: {'启用' if self.cache_enabled else '禁用'}, 文件缓存: {'启用' if self.tts_file_cache_enabled else '禁用'}, 自动修复: {'启用' if self.tts_file_cache_auto_repair else '禁用'}]")
         
         # 检查缓存文件（根据配置决定是否自动修复）
         if self._file_cache:
@@ -198,7 +207,7 @@ class MeloTTSEngine:
                             # 这样缓存的文件会和应用相同的处理（裁剪静音+归一化），保持一致性
                             return self.generate(text, speaker_id=None, speed=None, trim_silence=None, task_id=None)
                         except Exception as e:
-                            self._publish_log("ERROR", f"修复缓存时生成音频失败 {voice}/{text[:30]}...: {e}", indent=2)
+                            log_error("TTS", f"修复缓存时生成音频失败 {voice}/{text[:30]}...: {e}", indent=2)
                             return None
                     
                     self._file_cache.check_and_repair_missing_files(generate_for_cache)
@@ -231,13 +240,13 @@ class MeloTTSEngine:
             result = response.json()
             
             if result.get("success", False):
-                self._publish_log("DEBUG", f"成功加载 {self.model_language} 模型", indent=1)
+                log_debug("TTS", f"成功加载 {self.model_language} 模型", indent=1)
             else:
-                self._publish_log("WARN", f"加载 {self.model_language} 模型失败: {result.get('message', '未知错误')}", indent=1)
+                log_warn("TTS", f"加载 {self.model_language} 模型失败: {result.get('message', '未知错误')}", indent=1)
         except requests.exceptions.RequestException as e:
-            self._publish_log("ERROR", f"初始化模型失败（API调用错误）: {e}", indent=1)
+            log_error("TTS", f"初始化模型失败（API调用错误）: {e}", indent=1)
         except Exception as e:
-            self._publish_log("ERROR", f"初始化模型失败: {e}", indent=1)
+            log_error("TTS", f"初始化模型失败: {e}", indent=1)
     
     def _get_voice_identifier(self, speaker_id: int) -> str:
         """
@@ -533,10 +542,10 @@ class MeloTTSEngine:
             
             return audio_bytes
         except requests.exceptions.RequestException as e:
-            self._publish_log("ERROR", f"MeloTTS API调用错误: {e}", indent=1)
+            log_error("TTS", f"MeloTTS API调用错误: {e}", indent=1)
             return None
         except Exception as e:
-            self._publish_log("ERROR", f"MeloTTS生成错误: {e}", indent=1)
+            log_error("TTS", f"MeloTTS生成错误: {e}", indent=1)
             return None
     
     def generate(self, text: str, speaker_id: Optional[int] = None,
@@ -587,14 +596,14 @@ class MeloTTSEngine:
                 )
                 self.event_bus.publish(start_event)
             except Exception as e:
-                self._publish_log("ERROR", f"发送TTS_GENERATION_START事件错误: {e}", indent=1)
+                log_error("TTS", f"发送TTS_GENERATION_START事件错误: {e}", indent=1)
         
         # 检查文件缓存（所有句子都检查）
         if self._file_cache:
             cached_audio = self._file_cache.load(text, voice)
             if cached_audio is not None:
                 # 缓存命中，发送缓存命中事件
-                self._publish_log("DEBUG", f"缓存命中，跳过TTS生成 [文本: {text[:50]}...]", indent=1)
+                log_debug("TTS", f"缓存命中，跳过TTS生成 [文本: {text[:50]}...]", indent=1)
                 if self.event_bus:
                     try:
                         cache_event = create_event(
@@ -604,12 +613,14 @@ class MeloTTSEngine:
                         )
                         self.event_bus.publish(cache_event)
                     except Exception as e:
-                        self._publish_log("ERROR", f"发送TTS_CACHE_HIT事件错误: {e}", indent=1)
+                        log_error("TTS", f"发送TTS_CACHE_HIT事件错误: {e}", indent=1)
                 
                 if return_timing:
                     # 文件加载时间很短，返回0作为生成时间
                     return cached_audio, 0.0, 0.0
                 return cached_audio
+            else:
+                log_debug("TTS", f"文件缓存未命中 [文本: {text[:50]}...]", indent=1)
         
         # 检查内存缓存
         cache_key = None
@@ -627,7 +638,7 @@ class MeloTTSEngine:
                         return audio_segment, 0.0, 0.0
                     return audio_segment
                 except Exception as e:
-                    self._publish_log("ERROR", f"从缓存加载音频失败: {e}", indent=1)
+                    log_error("TTS", f"从缓存加载音频失败: {e}", indent=1)
             self._cache_misses += 1
         
         try:
@@ -657,9 +668,9 @@ class MeloTTSEngine:
                     audio_segment = self._normalize_loudness(audio_segment)
                 
                 if trimmed_ms > 0:
-                    self._publish_log("DEBUG", f"生成完成 [总耗时: {tts_total_elapsed*1000:.1f}ms, 生成: {tts_generation_time*1000:.1f}ms, 处理: {processing_time*1000:.1f}ms，裁剪静音{trimmed_ms}ms]", indent=1)
+                    log_debug("TTS", f"生成完成 [总耗时: {tts_total_elapsed*1000:.1f}ms, 生成: {tts_generation_time*1000:.1f}ms, 处理: {processing_time*1000:.1f}ms，裁剪静音{trimmed_ms}ms]", indent=1)
                 else:
-                    self._publish_log("DEBUG", f"生成完成 [总耗时: {tts_total_elapsed*1000:.1f}ms, 生成: {tts_generation_time*1000:.1f}ms, 处理: {processing_time*1000:.1f}ms]", indent=1)
+                    log_debug("TTS", f"生成完成 [总耗时: {tts_total_elapsed*1000:.1f}ms, 生成: {tts_generation_time*1000:.1f}ms, 处理: {processing_time*1000:.1f}ms]", indent=1)
                 
                 # 发送TTS第一个音频就绪事件
                 if self.event_bus:
@@ -676,12 +687,12 @@ class MeloTTSEngine:
                         )
                         self.event_bus.publish(ready_event)
                     except Exception as e:
-                        self._publish_log("ERROR", f"发送TTS_FIRST_AUDIO_READY事件错误: {e}", indent=1)
+                        log_error("TTS", f"发送TTS_FIRST_AUDIO_READY事件错误: {e}", indent=1)
                 
                 # 保存到内存缓存
                 if self._cache and cache_key and audio_bytes:
                     self._cache.put(cache_key, audio_bytes)
-                    self._publish_log("DEBUG", f"已缓存 [key: {cache_key[:8]}..., 缓存大小: {len(self._cache)}]", indent=1)
+                    log_debug("TTS", f"已缓存 [key: {cache_key[:8]}..., 缓存大小: {len(self._cache)}]", indent=1)
                 
                 # 保存到文件缓存（所有句子都保存）
                 if self._file_cache and audio_segment:
@@ -699,7 +710,7 @@ class MeloTTSEngine:
                     audio_segment = self._normalize_loudness(audio_segment)
                 
                 tts_total_elapsed = time.time() - tts_start_time
-                self._publish_log("DEBUG", f"生成完成 [总耗时: {tts_total_elapsed*1000:.1f}ms, 生成: {tts_generation_time*1000:.1f}ms]", indent=1)
+                log_debug("TTS", f"生成完成 [总耗时: {tts_total_elapsed*1000:.1f}ms, 生成: {tts_generation_time*1000:.1f}ms]", indent=1)
                 
                 # 发送TTS第一个音频就绪事件
                 if self.event_bus:
@@ -716,12 +727,12 @@ class MeloTTSEngine:
                         )
                         self.event_bus.publish(ready_event)
                     except Exception as e:
-                        self._publish_log("ERROR", f"发送TTS_FIRST_AUDIO_READY事件错误: {e}", indent=1)
+                        log_error("TTS", f"发送TTS_FIRST_AUDIO_READY事件错误: {e}", indent=1)
                 
                 # 保存到内存缓存
                 if self._cache and cache_key and audio_bytes:
                     self._cache.put(cache_key, audio_bytes)
-                    self._publish_log("DEBUG", f"已缓存 [key: {cache_key[:8]}..., 缓存大小: {len(self._cache)}]", indent=1)
+                    log_debug("TTS", f"已缓存 [key: {cache_key[:8]}..., 缓存大小: {len(self._cache)}]", indent=1)
                 
                 # 保存到文件缓存（所有句子都保存）
                 if self._file_cache and audio_segment:
@@ -733,7 +744,7 @@ class MeloTTSEngine:
                 
         except Exception as e:
             tts_elapsed = time.time() - tts_start_time
-            self._publish_log("ERROR", f"同步生成错误: {e} [耗时: {tts_elapsed*1000:.1f}ms]", indent=1)
+            log_error("TTS", f"同步生成错误: {e} [耗时: {tts_elapsed*1000:.1f}ms]", indent=1)
             return None
     
     def get_cache_stats(self) -> Dict[str, Any]:
@@ -761,7 +772,7 @@ class MeloTTSEngine:
             self._cache.clear()
             self._cache_hits = 0
             self._cache_misses = 0
-            self._publish_log("DEBUG", "缓存已清空")
+            log_debug("TTS", "缓存已清空")
     
     def _publish_log(self, level: str, message: str, indent: int = 0):
         """
