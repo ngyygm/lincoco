@@ -302,7 +302,7 @@ def main():
     )
     
     args = parser.parse_args()
-    
+
     # 先加载配置（用于初始化日志系统）
     config = Config(config_file=args.config)
     
@@ -450,3 +450,4 @@ def main():
 if __name__ == "__main__":
     main()
 
+# .\venv\Scripts\Activate.ps1

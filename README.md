@@ -88,16 +88,128 @@ conda activate voice
 pip install -r requirements.txt
 ```
 
-3. **配置环境变量**
+3. **配置系统**
 
-创建 `.env` 文件（参考 `.env.example`）并配置必要的参数：
-```env
-# OpenAI API 配置
-OPENAI_API_KEY=your_api_key_here
-OPENAI_API_BASE=https://api.openai.com/v1
+Lincoco 提供了灵活的配置管理方式，支持多种配置源：
 
-# 其他配置...
+### 配置方式（优先级从高到低）
+
+1. **环境变量** - 最高优先级，用于临时覆盖配置
+   - 命名规范：`VOICE_CHATBOT_<SECTION>_<KEY>`
+   - 示例：`export VOICE_CHATBOT_LLM_TEMPERATURE=0.9`
+
+2. **config.json 文件** - 推荐方式，便于版本控制和部署
+   - 系统会自动查找 `config.json` 或 `voice_chatbot/config.json`
+   - 只需包含需要修改的参数，未指定的使用默认值
+   - 使用 `python generate_config.py` 生成完整配置文件
+
+3. **默认配置** - 在 `voice_chatbot/utils/config.py` 中定义
+
+### 快速配置
+
+**方式 1：使用 config.json（推荐）**
+
+```bash
+# 生成默认配置文件
+python generate_config.py
+
+# 编辑 config.json 文件
+# 只需修改你需要改变的参数
 ```
+
+**方式 2：直接修改 config.py**
+
+直接编辑 `voice_chatbot/utils/config.py` 中的 `DEFAULT_CONFIG` 字典。
+
+### 主要配置项
+
+- **LLM 配置**（在 `llm.engines` 部分）
+  - API 地址和密钥
+  - 模型名称
+  - 提供商选择（openai/ollama/glm）
+
+- **TTS 配置**（在 `tts.default_engine` 和 `tts.engines` 部分）
+  - 默认引擎选择
+  - 各引擎 API 地址
+  - 音频参数
+
+- **声纹验证配置**（在 `asr.speaker_verification` 部分）
+  - 验证阈值
+  - 注册音频路径
+  - 滑动窗口参数
+
+### 配置示例
+
+```json
+{
+  "llm": {
+    "provider": "openai",
+    "engines": {
+      "openai": {
+        "api_base": "http://127.0.0.1:5000/v1",
+        "api_key": "your-api-key",
+        "model_name": "qwen3-1.7b"
+      }
+    }
+  },
+  "tts": {
+    "default_engine": "cosyvoice_tts",
+    "engines": {
+      "cosyvoice_tts": {
+        "api_url": "http://219.223.187.56:9880"
+      }
+    }
+  }
+}
+```
+
+### 配置文件说明
+
+系统会自动在以下位置查找 `config.json` 文件：
+1. 当前工作目录：`./config.json`
+2. voice_chatbot 目录：`./voice_chatbot/config.json`
+
+如果未找到 `config.json` 文件，系统将使用默认配置（不会报错）。
+
+### 代码中使用配置
+
+```python
+from voice_chatbot.utils.config import Config
+
+# 自动查找 config.json，如果不存在则使用默认配置
+config = Config()
+
+# 访问配置
+user_name = config.get("system.user_name")
+temperature = config.get("llm.temperature")
+
+# 修改配置
+config.set("llm.temperature", 0.9)
+
+# 保存到文件
+config.export_config("custom_config.json")
+```
+
+### 部分配置示例
+
+只需在 `config.json` 中包含需要修改的参数，其他参数将使用默认值：
+
+```json
+{
+  "system": {
+    "user_name": "我的名字",
+    "greeting": {
+      "enabled": true,
+      "text": "你好，我已准备好与你对话！"
+    }
+  },
+  "llm": {
+    "temperature": 0.9
+  }
+}
+```
+
+完整的配置示例请参考 [config.example.json](config.example.json)。
 
 4. **运行程序**
 ```bash
@@ -230,61 +342,331 @@ lincoco/
 
 ## ⚙️ 配置说明
 
-主要配置项在 `voice_chatbot/utils/config.py` 中定义，支持通过环境变量和配置文件进行配置。
+所有配置项在 `voice_chatbot/utils/config.py` 中定义，**直接修改该文件中的配置参数即可**。
 
-### 关键配置参数
+### 配置文件结构
 
-#### LLM 配置
+配置文件采用分层结构，包含以下主要部分：
+
+#### 1. 系统配置 (system)
 ```python
-llm.provider = "openai"               # LLM服务提供商：openai、ollama 或 glm
-llm.persona_name = "lincoco"          # 默认人设名称
-llm.user_name = "林嘿嘿"              # 用户名
-llm.max_tokens = 1024                 # 最大生成token数
-llm.temperature = 0.7                 # 生成温度
-llm.max_history_length = 50           # 最大历史记录长度（对话轮数）
+"system": {
+    "thread_timeout": 1.0,              # 通用线程等待超时(秒)
+    "user_name": "林嘿嘿",              # 用户名(用于人设文件中的{{user_name}}变量替换，以及声纹注册文件名)
+    "greeting": {
+        "enabled": True,                # 是否启用问候语
+        "text": "你好！我是林可可，很高兴见到你！",  # 问候语文本
+    },
+}
 ```
 
-#### TTS 配置
+#### 2. 基础音频配置 (audio)
 ```python
-tts.default_engine = "cosyvoice_tts"                 # TTS引擎：edge_tts、melo_tts、cosyvoice_tts
-tts.tts_file_cache_enabled = True     # 启用TTS文件缓存
-tts.enable_trim_silence = True        # 启用静音裁剪
-
-# 自然音频配置
-tts.natural_audio_count = 5         # 自然音频数量（0=不启用，>0表示同一文本保存多个版本）
-tts.tts_file_cache_auto_repair = True  # 是否自动修复缺失的缓存文件
-
-# MeloTTS 特定配置
-tts.engines.melo_tts.model_language = "ZH"  # 模型语言：ZH=中文, EN=英文, JP=日文等
-tts.engines.melo_tts.api_url = "http://127.0.0.1:8101"  # API 服务地址
-
-# CosyVoice TTS 特定配置
-tts.engines.cosyvoice_tts.api_url = "http://127.0.0.1:9880"  # API 服务地址
-tts.engines.cosyvoice_tts.reference_wav_path = None  # 参考音频文件路径（用于3s极速复刻）
-tts.engines.cosyvoice_tts.reference_text = None  # 参考文本（可选）
-tts.engines.cosyvoice_tts.use_filename_as_text = True  # 是否使用文件名作为参考文本
-tts.engines.cosyvoice_tts.speed = 1.0  # 语速
-tts.engines.cosyvoice_tts.support_natural_audio = True  # 是否支持自然音频
+"audio": {
+    "sample_rate": 16000,              # 音频采样率(Hz)，16000为标准
+    "chunk_size": 1024,                 # 每次读取的采样点数(约64ms)
+    "channels": 1,                      # 声道数(1=单声道，2=立体声)
+}
 ```
 
-#### 声纹验证配置
+#### 3. VAD语音活动检测配置 (vad)
 ```python
-asr.speaker_verification.enabled = True            # 启用声纹验证
-asr.speaker_verification.enroll_audio_path = "cache/speaker_verification_audio"  # 注册音频路径
-asr.speaker_verification.model_id = "iic/speech_campplus_sv_zh-cn_16k-common"  # 声纹模型
-asr.speaker_verification.similarity_threshold = 0.3   # 相似度阈值（0-1）
-asr.speaker_verification.min_audio_length = 0.5      # 最小音频长度（秒）
-asr.speaker_verification.auto_record = True         # 自动录制注册音频
-asr.speaker_verification.cache_embedding = True      # 缓存嵌入向量
-asr.speaker_verification.record_duration = 8.0      # 录制注册音频时长（秒）
-asr.speaker_verification.sliding_window.enabled = True  # 启用滑动窗口模式
-asr.speaker_verification.sliding_window.window_length = 0.6  # 窗口长度（秒）
-asr.speaker_verification.sliding_window.window_stride = 0.2  # 滑动步长（秒）
+"vad": {
+    "mode": 3,                          # VAD模式(0-3)，数字越大越敏感，3=最敏感
+    "activation_rate": 0.1,              # 激活率(0.0-1.0)，越小越敏感(建议0.2-0.4)
+    "adaptive_threshold": False,        # 是否启用自适应阈值
+    "min_activation_rate": 0.15,        # 最小激活率(自适应阈值时)
+    "max_activation_rate": 0.5,         # 最大激活率(自适应阈值时)
+    "check_interval": 0.1,              # 检测间隔(秒)
+    "thread_sleep": 0.01,               # 线程休眠间隔(秒)
+}
 ```
 
-#### ASR参数
+#### 4. ASR语音识别配置 (asr)
 ```python
-asr.no_speech_threshold = 0.4     # 无语音阈值（秒）
+"asr": {
+    # ASR模型配置
+    "model_path": "paraformer-zh-streaming",  # ASR模型路径
+    "language": "zh",                  # 语言设置(默认中文)
+    "preload_model": True,             # 是否预加载模型
+
+    # 流式识别参数
+    "chunk_size": [0, 10, 5],          # chunk大小配置，影响识别延迟
+    "encoder_chunk_look_back": 4,      # encoder上下文回溯chunks数
+    "decoder_chunk_look_back": 1,      # decoder上下文回溯chunks数
+    "pre_buffer_seconds": 1.0,         # 预缓存时长(秒)
+
+    # ASR队列和超时配置
+    "audio_queue_maxsize": 100,        # 音频队列最大大小
+    "result_timeout": 30.0,            # ASR结果等待超时(秒)
+    "result_time_buffer": 0.1,         # 结果时间缓冲(秒)
+    "max_result_age": 60.0,            # 结果最大保留时间(秒)
+
+    # ASR停止条件配置
+    "no_speech_threshold": 0.4,        # 无语音阈值(秒)，建议0.8-1.2秒
+
+    # ASR增强功能
+    "enable_deduplication": False,      # 是否启用流式去重
+    "invalid_recognition_words": ["", "i", "嗯", "啊", "呃", "哦", "额"],  # 无效识别词列表
+
+    # --- 声纹验证配置 ---
+    "speaker_verification": {
+        "enabled": True,                                     # 是否启用声纹锁
+        "model_id": "iic/speech_campplus_sv_zh-cn_16k-common",  # 3D-Speaker模型ID
+        "enroll_audio_path": "cache/speaker_verification_audio",  # 注册音频文件夹路径
+        "similarity_threshold": 0.4,                          # 相似度阈值(0.0-1.0)
+        "min_audio_length": 0.5,                             # 最小音频长度(秒)
+        "cache_embedding": True,                             # 是否缓存嵌入向量
+        "record_duration": 8.0,                              # 录制注册音频时长(秒)
+        "auto_record": True,                                 # 是否自动录制注册音频
+        "reading_texts": [                                   # 声纹注册朗读文本列表
+            "欢迎使用语音助手系统，今天天气真不错。",
+            "语音识别技术越来越智能了，这真的很令人兴奋。",
+            "这是一个安静的测试，请确保声音清晰可辨。",
+            "开始愉快的对话吧！",
+        ],
+        # 滑动窗口配置
+        "sliding_window": {
+            "enabled": True,                 # 是否启用滑动窗口验证
+            "window_length": 0.6,            # 窗口长度(秒)
+            "window_stride": 0.2,            # 滑动步长(秒)
+            "consecutive_hits": 2,           # 连续命中次数
+        },
+    },
+
+    # --- 标点恢复配置 ---
+    "punctuation_restore": {
+        "enabled": True,                 # 是否启用标点恢复
+        "model": "ct-punc",              # 标点恢复模型名称
+    },
+}
+```
+
+#### 5. LLM大语言模型配置 (llm)
+```python
+"llm": {
+    # LLM基础参数
+    "provider": "openai",               # 服务提供商: openai、ollama 或 glm
+    "max_tokens": 1024,                 # 最大生成token数
+    "temperature": 0.7,                # 生成温度(0.0-2.0)
+    "max_retries": 3,                   # API调用最大重试次数
+    "retry_delay": 1.0,                 # 重试延迟(秒)
+    "request_timeout": 30.0,            # 请求超时(秒)
+    "if_thinking": False,              # 是否启用思考模式
+
+    # 流式输出参数
+    "min_sentence_length": 8,                      # 最小句子长度(字符数)
+    "first_sentence_comma_delay_chars": 10,         # 首句逗号延迟字符数
+    "sentence_length_increment_rate": 2,           # 句子长度增量倍率
+    "max_sentence_length": 200,                    # 最大句子长度(字符数)
+
+    # 人设配置
+    "system_prompt": "你叫林可可...",              # 系统提示词(fallback)
+    "persona_name": "lincoco",                     # 默认人设名称
+    "persona_dir": "llm/personas",                 # 人设文件目录
+
+    # 上下文配置
+    "max_history_length": 50,                      # 最大历史记录长度(对话轮数)
+
+    # --- LLM引擎配置 ---
+    "engines": {
+        "openai": {                                # OpenAI兼容引擎
+            "api_base": "http://127.0.0.1:5000/v1",  # API基础URL
+            "api_key": "",                        # API密钥
+            "model_name": "qwen/qwen3-30b-a3b",    # 模型名称
+        },
+        "ollama": {                                # Ollama本地引擎
+            "api_base": "http://219.223.187.56:11434/v1",  # API基础URL
+            "api_key": "",                        # API密钥(本地通常为空)
+            "model_name": "gemma3:27b",            # 模型名称
+        },
+        "glm": {                                   # 智谱GLM引擎
+            "api_base": "https://open.bigmodel.cn/api/coding/paas/v4",  # API基础URL
+            "api_key": "",                        # API密钥
+            "model_name": "glm-4-flash-250414",    # 模型名称
+        },
+    },
+}
+```
+
+**重要提示**：如果使用 OpenAI 兼容的本地服务（如 vLLM、LM Studio），请修改 `llm.engines.openai` 中的 `api_base` 和 `model_name`。
+
+#### 6. TTS语音合成配置 (tts)
+```python
+"tts": {
+    # TTS引擎选择
+    "default_engine": "cosyvoice_tts",            # 当前使用的TTS引擎: edge_tts、melotts、cosyvoice_tts
+
+    # TTS音频处理
+    "silence_threshold": -40,                    # 静音检测阈值(dB)
+    "min_silence_len": 30,                       # 最小静音长度(毫秒)
+    "enable_trim_silence": True,                 # 是否裁剪静音
+    "trim_keep_start": 20,                       # 裁剪时开头固定保留长度(毫秒)
+    "trim_keep_end": 350,                        # 裁剪时结尾固定保留长度(毫秒)
+    "enable_normalize_loudness": True,            # 是否启用响度归一化
+    "playback_check_interval": 0.05,             # 播放检查间隔(秒)
+    "playback_status_update_interval": 0.1,      # 播放状态更新间隔(秒)
+
+    # TTS性能统计
+    "enable_performance_stats": True,            # 是否启用性能统计
+
+    # --- TTS缓存配置 ---
+    "cache_enabled": True,                       # 是否启用内存缓存
+    "cache_max_size": None,                      # 最大缓存条目数(None=无上限)
+
+    # --- TTS文件缓存配置 ---
+    "tts_file_cache_enabled": True,              # 是否启用文件缓存(持久化)
+    "tts_file_cache_dir": "cache/tts_cache",     # TTS缓存目录路径
+    "tts_file_cache_max_length": 20,             # 最大缓存长度(字符数，超过不保存)
+    "tts_file_cache_auto_repair": True,          # 是否自动修复缺失的缓存文件
+    "natural_audio_count": 5,                    # 自然音频数量(0=不启用，>0表示同一文本保存多个版本)
+
+    # --- TTS引擎配置 ---
+    "engines": {
+        "edge_tts": {                            # EdgeTTS引擎
+            "is_streaming": False,               # 是否流式引擎
+            "support_natural_audio": False,       # 是否支持自然音频
+            "voice_map": {                       # 语言-语音映射表
+                "zh": "zh-CN-XiaoyiNeural",
+                "en": "en-US-AnaNeural",
+                "ja": "zh-CN-XiaoyiNeural",
+                "fr": "fr-FR-DeniseNeural",
+                "es": "es-ES-ElviraNeural",
+                "de": "de-DE-KatjaNeural",
+            },
+            "connection_timeout": 30.0,           # 连接超时时间(秒)
+            "enable_session_reuse": True,         # 是否启用会话复用
+        },
+
+        "melo_tts": {                            # MeloTTS引擎
+            "is_streaming": False,               # 是否流式引擎
+            "support_natural_audio": False,       # 是否支持自然音频
+            "api_url": "http://127.0.0.1:8101",  # API服务地址
+            "api_endpoint": "/tts",              # API端点路径
+            "init_endpoint": "/init",            # 模型初始化端点路径
+            "timeout": 30.0,                     # HTTP请求超时时间(秒)
+            "model_language": "ZH",              # 模型语言(ZH=中文, EN=英文, JP=日文等)
+            "speaker_name_map": {                 # 语言到说话人名称映射
+                "zh": "ZH",
+                "en": "EN-US",
+            },
+            "default_speaker_name": None,        # 默认说话人名称
+            "sdp_ratio": 0.2,                    # SDP比例(控制语音稳定性)
+            "noise_scale": 0.6,                   # 噪声比例(控制语音表现力)
+            "noise_scale_w": 0.8,                # 噪声宽度比例(控制语音自然度)
+            "speed": 1.0,                         # 语速(1.0为正常速度)
+        },
+
+        "cosyvoice_tts": {                       # CosyVoice引擎
+            "is_streaming": False,               # 是否流式引擎
+            "support_natural_audio": True,        # 是否支持自然音频
+            "api_url": "http://219.223.187.56:9880",  # API服务地址
+            "set_model_endpoint": "/set_model",  # 设置参考音频端点路径
+            "generate_endpoint": "/generate",    # 生成音频端点路径
+            "get_model_endpoint": "/get_model",  # 获取当前参考音频配置端点路径
+            "timeout": 30.0,                     # HTTP请求超时时间(秒)
+            "reference_wav_path": None,          # 参考音频文件路径(用于3s极速复刻)
+            "reference_text": None,              # 参考文本(可选)
+            "use_filename_as_text": True,         # 是否使用文件名作为参考文本
+            "speed": 1.0,                        # 语速
+        },
+    },
+}
+```
+
+**TTS引擎选择**：通过修改 `tts.default_engine` 来选择使用的 TTS 引擎（`edge_tts`、`melotts` 或 `cosyvoice_tts`）。
+
+#### 7. 日志配置 (logging)
+```python
+"logging": {
+    # 文件日志
+    "file_enabled": False,               # 是否启用文件日志
+    "log_dir": "cache/logs",             # 日志文件目录路径
+
+    # 控制台日志
+    "enable_console": True,              # 是否输出到控制台
+    "show_delta": True,                  # 是否显示与上一事件的时间差
+    "show_source": True,                 # 是否显示代码来源前缀
+
+    # 日志过滤配置
+    "filtered_levels": ["INFO"],         # 允许输出的日志级别列表(DEBUG, INFO, WARN, ERROR)
+    "filtered_categories": ["ASR", "TTS", "LLM", "PLAY", "MAIN"],  # 允许输出的日志类别列表
+
+    # 日志类别专属颜色配置
+    "category_colors": {
+        "ASR": "GREEN",
+        "TTS": "BLUE",
+        "LLM": "YELLOW",
+        "PLAY": "MAGENTA",
+        "VAD": "CYAN",
+        "CTX": "BRIGHT_MAGENTA",
+        "THREAD": "BRIGHT_CYAN",
+        "MANAGER": "RED",
+        # ... 更多颜色配置
+    },
+
+    # SequenceDiagram流程记录
+    "enable_sequence_diagram": True,     # 是否启用sequenceDiagram记录
+    "sequence_diagram_flow_timeout": 30.0,  # 流程超时时间(秒)
+
+    # 性能分析配置
+    "performance_analysis": {
+        "enabled": True,                 # 是否启用响应耗时详细分析
+        "show_details": True,            # 是否输出各个阶段的细节
+    },
+}
+```
+
+### 配置方法
+
+1. **直接修改配置文件**：编辑 `voice_chatbot/utils/config.py`，修改相应配置项的值
+2. **保存并重启**：修改配置后保存文件，重启程序即可生效
+3. **配置验证**：程序启动时会自动验证配置参数的合法性，如有错误会提示
+
+### 常见配置场景
+
+#### 场景1：使用 OpenAI 官方 API
+```python
+"llm": {
+    "provider": "openai",
+    "engines": {
+        "openai": {
+            "api_base": "https://api.openai.com/v1",
+            "api_key": "sk-xxxxxxxxxxxxxxxxxxxx",
+            "model_name": "gpt-4",
+        },
+    },
+}
+```
+
+#### 场景2：使用本地 vLLM 服务
+```python
+"llm": {
+    "provider": "openai",
+    "engines": {
+        "openai": {
+            "api_base": "http://127.0.0.1:8000/v1",
+            "api_key": "empty",  # 本地服务可以使用空字符串
+            "model_name": "Qwen/Qwen2.5-7B-Instruct",
+        },
+    },
+}
+```
+
+#### 场景3：禁用声纹验证
+```python
+"asr": {
+    "speaker_verification": {
+        "enabled": False,  # 设置为False即可禁用
+    },
+}
+```
+
+#### 场景4：切换 TTS 引擎
+```python
+"tts": {
+    "default_engine": "edge_tts",  # 或 "melo_tts", "cosyvoice_tts"
+}
 ```
 
 详细配置说明请参考 [PROJECT_OUTLINE.md](PROJECT_OUTLINE.md#-配置参数)。

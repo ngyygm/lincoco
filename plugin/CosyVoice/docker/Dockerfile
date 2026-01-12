@@ -4,7 +4,7 @@ ARG VENV_NAME="cosyvoice"
 ENV VENV=$VENV_NAME
 ENV LANG=C.UTF-8 LC_ALL=C.UTF-8
 
-ENV DEBIAN_FRONTEN=noninteractive
+ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONUNBUFFERED=1
 SHELL ["/bin/bash", "--login", "-c"]
 
@@ -46,6 +46,6 @@ RUN git clone --recursive https://github.com/FunAudioLLM/CosyVoice.git
 
 RUN conda activate ${VENV} && conda install -y -c conda-forge pynini==2.1.5
 RUN conda activate ${VENV} && cd CosyVoice && \
-    pip install -r requirements.txt -i https://mirrors.aliyun.com/pypi/simple/ --trusted-host=mirrors.aliyun.com
+    pip install -r requirements.txt -i https://mirrors.aliyun.com/pypi/simple/ --trusted-host=mirrors.aliyun.com --no-cache-dir
 
 WORKDIR /workspace/CosyVoice

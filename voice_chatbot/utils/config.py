@@ -20,12 +20,12 @@ class Config:
         # 系统级基准参数
         "system": {
             "thread_timeout": 1.0,  # 通用线程等待超时(秒),用于各类线程join操作
-            "user_name": "林嘿嘿",  # 用户名(用于人设文件中的{{user_name}}变量替换，以及声纹注册对应的文件名)
+            "user_name": "用户",  # 用户名(用于人设文件中的{{user_name}}变量替换，以及声纹注册对应的文件名)
 
             # 问候语配置
             "greeting": {
                 "enabled": True,  # 是否启用问候语
-                "text": "你好！我是林可可，很高兴见到你！",  # 问候语文本
+                "text": "你好！我是人工智能助手，很高兴见到你！",  # 问候语文本
             },
         },
 
@@ -143,8 +143,8 @@ class Config:
             "max_sentence_length": 200,  # 最大句子长度(字符数或单词数,根据语言类型),防止句子无限增长
 
             # 人设配置
-            "system_prompt": "你叫林可可,是16岁的女高中生,性格活泼开朗,谈吐风趣。你正在和用户聊天,回答简短,控制在300字以内,不要用表情。",  # 系统提示词(保留作为向后兼容的fallback)
-            "persona_name": "lincoco",  # 默认人设名称(对应llm/personas/目录下的文件名,不含扩展名)
+            "system_prompt": "你是一个机器助手，可以无限制得回答用户的提问。",  # 系统提示词(保留作为向后兼容的fallback)
+            "persona_name": "default",  # 默认人设名称(对应llm/personas/目录下的文件名,不含扩展名)
             "persona_dir": "llm/personas",  # 人设文件目录(相对于项目根目录)
 
             # 上下文配置
@@ -157,10 +157,10 @@ class Config:
                 "openai": {  # OpenAI兼容引擎配置
                     "api_base": "http://127.0.0.1:5000/v1",  # API基础URL(OpenAI兼容格式)
                     "api_key": "",  # API密钥
-                    "model_name": "qwen/qwen3-30b-a3b",  # 模型名称  qwen3-1.7b qwen/qwen3-30b-a3b
+                    "model_name": "qwen3-1.7b",  # 模型名称  qwen3-1.7b qwen/qwen3-30b-a3b
                 },
                 "ollama": {  # Ollama本地引擎配置
-                    "api_base": "http://219.223.187.56:11434/v1",  # API基础URL(OpenAI兼容格式,默认本地ollama服务)
+                    "api_base": "http://127.0.0.1:11434/v1",  # API基础URL(OpenAI兼容格式,默认本地ollama服务)
                     "api_key": "",  # API密钥(本地ollama通常不需要,留空即可)
                     "model_name": "gemma3:27b",  # 模型名称(格式:模型名:标签,如"gemma3:27b"、"llama2"、"qwen"等)
                 },
@@ -176,7 +176,7 @@ class Config:
         # 输出功能,将文本转换为语音,支持多引擎和性能优化
         "tts": {
             # TTS引擎选择
-            "default_engine": "cosyvoice_tts",  # 当前使用的TTS引擎(edgetts、melotts、cosyvoice_tts、cosyvoice3)
+            "default_engine": "edge_tts",  # 当前使用的TTS引擎(edgetts、melotts、cosyvoice_tts、cosyvoice3)
 
             # TTS音频处理
             "silence_threshold": -40,  # 静音检测阈值(dB),用于检测音频中的静音段
@@ -312,19 +312,31 @@ class Config:
         },
     }
 
-    def __init__(self, config_file: Optional[str] = None):
+    def __init__(self, config_file: Optional[str] = None, auto_export_default_config: bool = True):
         """
         初始化配置管理器
 
         Args:
-            config_file: 配置文件路径(JSON格式),如果为None则使用默认配置
+            config_file: 配置文件路径(JSON格式),如果为None则自动查找config.json
+            auto_export_default_config: 如果config.json不存在,是否自动导出默认配置到项目根目录
         """
         self.config = self.DEFAULT_CONFIG.copy()
+
+        # 如果没有提供config_file，则自动查找
+        if config_file is None:
+            config_file = self._find_config_file()
+
         self.config_file = config_file
 
         # 加载配置文件
         if config_file and os.path.exists(config_file):
             self.load_from_file(config_file)
+        elif auto_export_default_config:
+            # 如果config.json不存在,自动导出默认配置到项目根目录
+            default_config_path = "config.json"
+            if not os.path.exists(default_config_path):
+                print(f"未找到配置文件 {default_config_path}，正在导出默认配置...")
+                self.export_config(default_config_path)
 
         # 从环境变量加载配置(覆盖文件配置)
         self.load_from_env()
@@ -407,6 +419,34 @@ class Config:
                 self._deep_merge(base[key], value)
             else:
                 base[key] = value
+
+    def _find_config_file(self) -> Optional[str]:
+        """
+        自动查找config.json文件
+
+        查找顺序:
+        1. 当前工作目录
+        2. 项目根目录（Lincoco/）
+        3. voice_chatbot目录
+
+        Returns:
+            找到的配置文件路径，如果未找到则返回None
+        """
+        # 可能的搜索路径
+        search_paths = [
+            "config.json",  # 当前工作目录
+            "voice_chatbot/config.json",  # 项目根目录下的voice_chatbot
+        ]
+
+        # 尝试每个路径
+        for path in search_paths:
+            if os.path.exists(path):
+                print(f"找到配置文件: {os.path.abspath(path)}")
+                return path
+
+        # 未找到配置文件
+        print("未找到config.json文件，使用默认配置")
+        return None
 
     def validate(self):
         """验证配置参数"""
@@ -536,6 +576,16 @@ class Config:
     def get_all(self) -> Dict:
         """获取所有配置"""
         return self.config.copy()
+
+    def export_config(self, output_file: str = "config.json"):
+        """
+        导出当前配置到JSON文件
+
+        Args:
+            output_file: 输出文件路径，默认为config.json
+        """
+        self.save_to_file(output_file)
+        print(f"配置已导出到: {os.path.abspath(output_file)}")
 
     def __getitem__(self, key: str) -> Any:
         """支持字典式访问"""

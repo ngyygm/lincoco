@@ -40,6 +40,10 @@ def main():
     with open('{}/spk2utt'.format(args.des_dir), 'w') as f:
         for k, v in spk2utt.items():
             f.write('{} {}\n'.format(k, ' '.join(v)))
+    if args.instruct != '':
+        with open('{}/instruct'.format(args.des_dir), 'w') as f:
+            for k, v in utt2text.items():
+                f.write('{} {}\n'.format(k, args.instruct))
     return
 
 
@@ -48,6 +52,8 @@ if __name__ == "__main__":
     parser.add_argument('--src_dir',
                         type=str)
     parser.add_argument('--des_dir',
+                        type=str)
+    parser.add_argument('--instruct',
                         type=str)
     args = parser.parse_args()
     main()
