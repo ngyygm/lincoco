@@ -76,6 +76,10 @@ pretrained/**/*.safetensors
 .env.local
 .env.*.local
 
+# 配置文件（包含敏感信息，使用 config.example.json 作为模板）
+config.json
+!config.example.json
+
 # Temporary files
 *.tmp
 *.temp
@@ -126,5 +130,42 @@ plugin/MeloTTS/melotts.egg-info/
 plugin/MeloTTS/.git/
 plugin/CosyVoice/.git/
 plugin/CosyVoice/__pycache__/
+plugin/CosyVoice/runtime/
+plugin/CosyVoice/examples/output/
+plugin/CosyVoice/examples/wavs/
 plugin/3D-Speaker/.git/
+plugin/3D-Speaker/__pycache__/
+
+# Cursor IDE 终端文件
+terminals/
+
+# 数据库文件
+*.db
+*.sqlite
+*.sqlite3
+
+# 大型测试文件和样本数据
+test_data/
+samples/
+samples_audio/
+test_audio/
+
+# PyTorch 和深度学习相关缓存
+*.pth.tar
+*.ckpt.tar
+checkpoints/
+runs/
+wandb/
+
+# Gradio 临时文件
+gradio_cached_examples/
+flagged/
+
+# Windows 相关
+Thumbs.db
+desktop.ini
+
+# macOS 相关
+.AppleDouble
+.LSOverride
 
