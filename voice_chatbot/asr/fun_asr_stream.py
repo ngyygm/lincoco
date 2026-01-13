@@ -585,17 +585,27 @@ class FunASRStream:
             # 首先处理预缓存的音频（VAD检测前的音频）
             pre_audio = self.pre_buffer.get_all()
             if len(pre_audio) > 0:
-                log_debug("ASR", f"加载预缓存音频: {len(pre_audio)/self.sample_rate:.2f}秒 ({len(pre_audio)}采样点)", indent=1)
+                duration = len(pre_audio) / self.sample_rate
+                log_debug("ASR", f"加载预缓存音频: {duration:.2f}秒 ({len(pre_audio)}采样点)", indent=1)
                 buffer = np.concatenate([buffer, pre_audio])
+                log_debug("ASR", f"加载预缓存后，buffer长度: {len(buffer)}采样点({len(buffer)/self.sample_rate:.2f}秒)", indent=1)
+            
+            # 检查声纹验证状态
+            speaker_verification_enabled = self.speaker_verification and self.speaker_verification.is_enabled() and not self.speaker_verified
+            log_debug("ASR", f"声纹验证状态: enabled={speaker_verification_enabled}, speaker_verification={self.speaker_verification is not None}, is_enabled={self.speaker_verification.is_enabled() if self.speaker_verification else False}, speaker_verified={self.speaker_verified if hasattr(self, 'speaker_verified') else 'N/A'}", indent=1)
             
             # 如果启用了声纹锁且尚未验证，使用滑动窗口进行声纹验证
-            if self.speaker_verification and self.speaker_verification.is_enabled() and not self.speaker_verified:
+            if speaker_verification_enabled:
                 # 从配置读取滑动窗口参数
                 window_length = self.sv_window_length if self.sv_sliding_window_enabled else self.min_verification_length / self.sample_rate
                 window_stride = self.sv_window_stride if self.sv_sliding_window_enabled else 0
                 window_samples = int(window_length * self.sample_rate)
                 stride_samples = int(window_stride * self.sample_rate)
                 consecutive_hits_required = self.sv_consecutive_hits if self.sv_sliding_window_enabled else 1
+                
+                # 计算需要保留的最小长度（优先遵循pre_buffer_seconds）
+                pre_buffer_samples = int(self.pre_buffer_seconds * self.sample_rate)
+                log_debug("ASR", f"预缓存保留长度: {pre_buffer_samples}采样点({self.pre_buffer_seconds:.2f}秒)", indent=1)
                 
                 log_debug("ASR", f"启用声纹 {'滑动窗口' if self.sv_sliding_window_enabled else '固定窗口'}验证 - 窗口长度: {window_length}秒" + (f", 滑动步长: {window_stride}秒, 连续命中次数: {consecutive_hits_required}" if self.sv_sliding_window_enabled else ""))
                 
@@ -646,9 +656,49 @@ class FunASRStream:
                                 log_debug("ASR", f"连续{consecutive_hits}次声纹验证通过，开始正式识别")
                                 
                                 # 从第一次通过的声纹位置开始记录音频数据流
+                                # 但优先遵循pre_buffer_seconds设定的长度，确保预缓存不被截断
                                 if first_hit_position is not None and first_hit_position > 0:
-                                    buffer = buffer[first_hit_position:]
-                                    log_debug("ASR", f"从第一次通过的声纹位置开始记录音频，保留 {len(buffer)} 采样点 ({len(buffer)/self.sample_rate:.2f}秒)", indent=1)
+                                    # 计算需要保留的起始位置
+                                    # 优先保留pre_buffer_seconds长度的音频（从buffer开头）
+                                    # 如果first_hit_position在pre_buffer_samples之前，保留整个pre_buffer_samples（从0开始）
+                                    # 如果first_hit_position在pre_buffer_samples之后，从first_hit_position开始，但也要确保至少保留pre_buffer_samples长度
+                                    if first_hit_position < pre_buffer_samples:
+                                        # first_hit_position在预缓存范围内，保留整个pre_buffer_samples（从0开始）
+                                        keep_start = 0
+                                        log_debug("ASR", 
+                                                f"first_hit_position({first_hit_position})在预缓存范围内，保留整个预缓存（从0开始）", 
+                                                indent=1)
+                                    else:
+                                        # first_hit_position在预缓存范围外
+                                        # 从first_hit_position开始，但确保至少保留pre_buffer_samples长度
+                                        # 如果从first_hit_position开始会丢失太多预缓存，则从len(buffer) - pre_buffer_samples开始
+                                        min_keep_start = max(0, len(buffer) - pre_buffer_samples)
+                                        keep_start = min(first_hit_position, min_keep_start)
+                                        log_debug("ASR", 
+                                                f"first_hit_position({first_hit_position})在预缓存范围外，"
+                                                f"min_keep_start={min_keep_start}，最终keep_start={keep_start}", 
+                                                indent=1)
+                                    
+                                    buffer = buffer[keep_start:]
+                                    log_debug("ASR", 
+                                            f"声纹验证通过后保留音频: 从位置{keep_start}开始, "
+                                            f"保留 {len(buffer)} 采样点 ({len(buffer)/self.sample_rate:.2f}秒), "
+                                            f"first_hit_position={first_hit_position}, pre_buffer_samples={pre_buffer_samples}", 
+                                            indent=1)
+                                else:
+                                    # 如果没有first_hit_position，确保至少保留pre_buffer_seconds长度
+                                    if len(buffer) > pre_buffer_samples:
+                                        keep_start = max(0, len(buffer) - pre_buffer_samples)
+                                        buffer = buffer[keep_start:]
+                                        log_debug("ASR", 
+                                                f"声纹验证通过后保留音频（无first_hit_position）: "
+                                                f"从位置{keep_start}开始，保留 {len(buffer)} 采样点 ({len(buffer)/self.sample_rate:.2f}秒)", 
+                                                indent=1)
+                                    else:
+                                        log_debug("ASR", 
+                                                f"声纹验证通过后保留音频（无first_hit_position）: "
+                                                f"buffer长度({len(buffer)})小于pre_buffer_samples({pre_buffer_samples})，保留全部", 
+                                                indent=1)
                                 
                                 break
                             else:
@@ -713,16 +763,25 @@ class FunASRStream:
                         self._reset_text_accumulator()
                     
                     return  # 直接退出识别线程，不进行ASR识别
+            else:
+                log_debug("ASR", "声纹验证未启用，跳过声纹验证部分", indent=1)
 
             chunk_count = 0
             last_text_length = 0  # 记录上一次文本长度，用于检测是否有新文本
+            
+            # 记录进入主循环前的buffer状态
+            log_debug("ASR", f"进入主识别循环前，buffer长度: {len(buffer)}采样点({len(buffer)/self.sample_rate:.2f}秒)", indent=1)
+            if len(buffer) == 0:
+                log_warn("ASR", "警告：进入主识别循环时buffer为空！预缓存可能丢失", indent=1)
         
             while True:
                 try:
                     # 尝试从队列获取音频
                     try:
                         audio_chunk = self.audio_queue.get(timeout=0.05)
+                        buffer_before = len(buffer)
                         buffer = np.concatenate([buffer, audio_chunk])
+                        buffer_after = len(buffer)
                     except queue.Empty:
                         # 队列为空，检查VAD状态
                         with self.state_lock:
@@ -738,11 +797,16 @@ class FunASRStream:
                                 break
                         continue
                     
-                    # 当累积足够的音频时进行识别
+                    
                     while len(buffer) >= self.asr_chunk_stride:
+                        # 提取chunk
                         speech_chunk = buffer[:self.asr_chunk_stride]
                         buffer = buffer[self.asr_chunk_stride:]
                         chunk_count += 1
+                        
+                        # 第一次进入识别循环时，记录日志
+                        if chunk_count == 1:
+                            log_debug("ASR", f"第一次进入识别循环，当前buffer长度: {len(buffer)}采样点({len(buffer)/self.sample_rate:.2f}秒), asr_chunk_stride: {self.asr_chunk_stride}采样点", indent=1)
                         
                         # 进行流式识别
                         try:

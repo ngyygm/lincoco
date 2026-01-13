@@ -357,7 +357,7 @@ class Logger:
     def log(self, level, category, message, indent=0, show_thread=True, inline=False, color=None, source=None):
         """
         标准化日志输出
-        
+
         Args:
             level: 日志级别 (INFO, WARN, ERROR, DEBUG)
             category: 日志类别 (ASR, TTS, LLM, PLAY, VAD, TASK等)
@@ -370,18 +370,18 @@ class Logger:
         """
         if not self._should_log(level, category):
             return
-        
+
         timestamp = get_timestamp()
         thread_info = ""
         if show_thread:
             thread_id = get_thread_id()
             thread_name = get_thread_name()
             thread_info = f"[T:{thread_name}|{thread_id%10000:04d}]"
-        
+
         indent_str = "  " * indent
         level_str = level.ljust(5)
         category_str = category.ljust(6)
-        
+
         # 获取代码来源（如果启用且未提供）
         source_str = ""
         if self.show_source:
@@ -389,9 +389,9 @@ class Logger:
                 source = get_caller_source()  # 自动跳过logger.py内部的调用栈
             if source:
                 source_str = f"[{source}] "
-        
+
         log_message = f"[{timestamp}]{thread_info} [{level_str}] [{category_str}] {source_str}{indent_str}{message}"
-        
+
         # 确定使用的颜色：优先使用传入的 color 参数，否则使用 category 专属颜色，最后使用默认颜色
         final_color = None
         if color is not None:
@@ -402,24 +402,24 @@ class Logger:
             category_upper = category.upper()
             if category_upper in self.category_colors:
                 final_color = self.category_colors[category_upper]
-        
+
         # 应用颜色代码
         if final_color is not None:
             colored_message = f"{final_color}{log_message}{Colors.RESET}"
         else:
             colored_message = log_message
-        
+
         # 输出到控制台
         # 确保 ANSI 支持已启用（特别是在 Windows 上）
         if sys.platform == 'win32' and not _ansi_enabled:
             _enable_windows_ansi()
-        
+
         if inline:
             # 同一行更新（使用\r，不换行）
             print(f"\r{colored_message}", end='', flush=True)
         else:
             print(colored_message, flush=True)
-        
+
         # 输出到文件
         if self.log_file_enabled:
             with self._lock:
@@ -429,6 +429,30 @@ class Logger:
                     clean_message = _strip_ansi_codes(log_message)
                     self.log_file_handle.write(clean_message + '\n')
                     self.log_file_handle.flush()
+
+        # 广播到 Web 端（如果 WebSocket 服务器已设置）
+        # 注意：inline 日志也会广播到 Web 端，但 Web 端是逐行显示的，不会有控制台的 \r 效果
+        with _websocket_server_lock:
+            if _websocket_server:
+                try:
+                    _websocket_server.broadcast_log(
+                        level=level,
+                        category=category,
+                        message=message,
+                        timestamp=timestamp,
+                        source=source if source else (get_caller_source() if self.show_source else None),
+                        inline=inline  # 传递 inline 标记，Web 端可以根据需要处理
+                    )
+                except Exception as e:
+                    # 避免日志广播失败影响主流程
+                    # 可以取消注释下面这行来调试广播错误
+                    # print(f"广播日志失败: {e}")
+                    pass
+            else:
+                # WebSocket 服务器未设置，无法广播
+                # 可以取消注释下面这行来调试
+                # print(f"警告：WebSocket 服务器未设置，无法广播日志 [{level}][{category}]")
+                pass
     
     def info(self, category, message, indent=0, show_thread=True, inline=False, color=None, source=None):
         """信息日志"""
@@ -470,6 +494,10 @@ class Logger:
 # 全局日志实例（延迟初始化）
 _global_logger = None
 _logger_lock = threading.Lock()
+
+# WebSocket 服务器实例（用于广播日志到 Web 端）
+_websocket_server = None
+_websocket_server_lock = threading.Lock()
 
 
 def init_logger(log_file_enabled=True, log_dir='logs',
@@ -592,4 +620,22 @@ def log_debug(category, message, indent=0, show_thread=True, color=None, source=
 def log_with_timestamp(message):
     """兼容旧代码的日志函数（不推荐使用）"""
     return f"[{get_timestamp()}] {message}"
+
+
+def set_websocket_server(websocket_server):
+    """
+    设置 WebSocket 服务器实例，用于广播日志到 Web 端
+
+    Args:
+        websocket_server: WebSocketServer 实例
+    """
+    global _websocket_server
+    with _websocket_server_lock:
+        _websocket_server = websocket_server
+
+
+def get_websocket_server():
+    """获取当前的 WebSocket 服务器实例"""
+    with _websocket_server_lock:
+        return _websocket_server
 

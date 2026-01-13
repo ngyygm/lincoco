@@ -396,7 +396,7 @@ def main():
                             # 获取audio_player实例
                             audio_player = dialogue_manager.audio_player
                             # 播放音频（使用task_id=None跳过任务取消检查）
-                            audio_player.play(audio_segment, task_id=None)
+                            audio_player.play(audio_segment, current_sentence_text=greeting_text, task_id=None)
                         else:
                             log_error("MAIN", "问候语生成失败", indent=1)
                     else:

@@ -27,6 +27,13 @@ class Config:
                 "enabled": True,  # 是否启用问候语
                 "text": "你好！我是人工智能助手，很高兴见到你！",  # 问候语文本
             },
+
+            # WebSocket 服务器配置（统一管理，所有 Web 功能共享此配置）
+            "websocket": {
+                "enabled": True,  # 是否启用 WebSocket 服务器（支持日志广播、音频传输等）
+                "host": "0.0.0.0",  # WebSocket 服务器监听地址
+                "port": 8766,  # WebSocket 服务器监听端口
+            },
         },
 
         # ====== 2. 基础音频配置 ======
@@ -43,11 +50,11 @@ class Config:
             "mode": 3,  # VAD模式(0-3),数字越大越敏感,3=最敏感。降低此值会减少误判但可能漏检
             "activation_rate": 0.1,  # VAD激活率(0.0-1.0),检测窗口内语音块占比超过此值才判定为有语音
                                    # 值越小越敏感,容易检测到声音但可能误判环境音
-                                   # 建议值:0.2-0.4,声音小或感觉过滤太多可降低(如0.2-0.3)
+                                   # 建议值:0.1-0.3,声音小或感觉过滤太多可降低(如0.1-0.15)
             "adaptive_threshold": False,  # 是否启用自适应阈值(根据环境自动调整激活率),适合环境噪声变化大的场景
-            "min_activation_rate": 0.15,  # 最小激活率(0.0-1.0),自适应阈值时的下限
-            "max_activation_rate": 0.5,  # 最大激活率(0.0-1.0),自适应阈值时的上限
-            "check_interval": 0.1,  # VAD检测间隔(秒),检测窗口大小,值越小响应越快但CPU占用更高
+            "min_activation_rate": 0.05,  # 最小激活率(0.0-1.0),自适应阈值时的下限
+            "max_activation_rate": 0.3,  # 最大激活率(0.0-1.0),自适应阈值时的上限
+            "check_interval": 0.05,  # VAD检测间隔(秒),检测窗口大小,值越小响应越快但CPU占用更高
             "thread_sleep": 0.01,  # VAD线程休眠间隔(秒)
         },
 
@@ -64,7 +71,7 @@ class Config:
                                      # 影响识别延迟和准确性,需根据模型特性调整
             "encoder_chunk_look_back": 4,  # encoder self-attention lookback chunks数量,用于上下文理解
             "decoder_chunk_look_back": 1,  # decoder cross-attention lookback chunks数量,用于解码时参考历史
-            "pre_buffer_seconds": 1.0,  # 预缓存时长(秒),保留VAD检测前的音频避免丢失开头
+            "pre_buffer_seconds": 1.5,  # 预缓存时长(秒),保留VAD检测前的音频避免丢失开头
 
             # ASR队列和超时配置
             "audio_queue_maxsize": 100,  # 音频队列最大大小,用于缓存待识别的音频块
@@ -88,7 +95,7 @@ class Config:
             # --- 声纹锁配置 ---
             # 如果开启,ASR只对符合设定声纹的声音进行识别,提供安全保护
             "speaker_verification": {
-                "enabled": True,  # 是否启用声纹锁功能
+                "enabled": False,  # 是否启用声纹锁功能
                 "model_id": "iic/speech_campplus_sv_zh-cn_16k-common",  # 3D-Speaker模型ID(从ModelScope加载)
                 "enroll_audio_path": "cache/speaker_verification_audio",  # 注册音频文件夹路径
                                                                    # 支持多个.wav文件,默认保存在speaker_verification_audio目录下

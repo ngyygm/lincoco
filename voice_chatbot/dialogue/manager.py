@@ -22,7 +22,6 @@ from voice_chatbot.dialogue.task_context import TaskContext, TaskCancelledExcept
 from voice_chatbot.dialogue.events import EventType, EventBus, EventFilter, create_event
 from voice_chatbot.utils import log_info, log_warn, log_error, log_debug
 from voice_chatbot.utils.timer import PerformanceTimer
-from voice_chatbot.utils.audio_player import AudioPlayer, PlaybackStatus
 
 
 class TraceableLock:
@@ -140,6 +139,10 @@ class DialogueManager:
     - 状态管理（通过 StateManager）
     - 任务上下文管理（通过 ContextManager）
     - 事件驱动的日志输出
+
+    麦克风模式：
+    - 本地麦克风模式：使用 MicrophoneRecorder 直接采集音频
+    - Web 麦克风模式：使用 WebMicrophoneServer 接收 WebSocket 实时音频流
     """
     
     def __init__(self, config):
@@ -164,6 +167,15 @@ class DialogueManager:
         self.invalid_recognition_words = config.get("asr.invalid_recognition_words", ["", "i", "嗯", "啊", "呃", "哦", "额"])
         self.thread_timeout = config.get("system.thread_timeout", 1.0)
         self.max_history_length = config.get("llm.max_history_length", 50)  # 最大历史记录长度（对话轮数）
+
+        # 麦克风类型配置：根据 WebSocket 是否启用自动选择
+        # system.websocket.enabled = True -> Web麦克风，False -> 本地麦克风
+        ws_enabled = config.get("system.websocket.enabled", False)
+        self.microphone_type = "web" if ws_enabled else "local"
+
+        # 播放器类型配置：根据 WebSocket 是否启用自动选择
+        # system.websocket.enabled = True -> Web播放器，False -> 本地播放器
+        self.player_type = "web" if ws_enabled else "local"
         
         # 性能分析配置
         performance_analysis_config = config.get("logging.performance_analysis", {})
@@ -185,7 +197,8 @@ class DialogueManager:
         self.audio_player: Optional[Any] = None
         self.persona_manager: Optional[Any] = None
         self.punctuation_restorer: Optional[Any] = None  # 标点恢复器
-        
+        self.websocket_server: Optional[Any] = None  # WebSocket 服务器（统一管理）
+
         # 状态变量
         self.running = False
         self.last_active_time = 0.0  # 最后活动时间（用于NO_SPEECH_THRESHOLD检测）
@@ -271,10 +284,11 @@ class DialogueManager:
     def initialize_modules(self):
         """
         初始化所有模块
-        
+
         包括：
         - EventBus 事件总线处理线程（线程3）
-        - MicrophoneRecorder（音频采集）
+        - WebSocket 服务器（如果启用，用于日志广播和音频传输）
+        - MicrophoneRecorder（音频采集）或 WebMicrophoneAdapter（Web麦克风）
         - WebRTCVAD（VAD检测）
         - FunASRStream（ASR识别）
         - LLM（OpenAI流式生成）
@@ -283,18 +297,87 @@ class DialogueManager:
         - PersonaManager（人设管理）
         """
         log_info("MANAGER", "开始初始化模块...", indent=0)
-        
+
         # 启动事件总线处理线程（线程3）
         self.event_bus.start_processing()
         log_info("MANAGER", "事件总线处理线程已启动", indent=1)
-        
-        # 初始化音频采集模块
-        from voice_chatbot.utils.microphone import MicrophoneRecorder
-        self.microphone = MicrophoneRecorder(
-            config=self.config,
-            on_audio_data_callback=self._on_audio_data
-        )
-        log_info("MANAGER", "音频采集模块初始化完成", indent=1)
+
+        # ====== 统一启动 WebSocket 服务器 ======
+        # 如果启用了 WebSocket，统一在全局启动，所有模块共享
+        ws_enabled = self.config.get("system.websocket.enabled", True)
+        if ws_enabled:
+            log_info("MANAGER", "WebSocket 服务器功能已启用", indent=1)
+
+            from voice_chatbot.utils.websocket_server import WebSocketServer
+            from voice_chatbot.utils.logger import set_websocket_server
+
+            ws_config = self.config.get("system.websocket", {})
+            self.websocket_server = WebSocketServer(
+                config=self.config,
+                host=ws_config.get("host", "0.0.0.0"),
+                port=ws_config.get("port", 8766)
+            )
+
+            # 将 WebSocket 服务器设置到 logger，用于广播日志到 Web 端
+            # 注意：必须在创建服务器后立即调用，否则日志无法广播
+            set_websocket_server(self.websocket_server)
+
+            log_info("MANAGER", "WebSocket 服务器初始化完成", indent=1)
+            log_info("MANAGER", "日志广播已启用，Web 端将显示系统日志", indent=1)
+
+            # 在后台启动 WebSocket 服务器
+            import asyncio
+            import threading
+            def start_websocket_server():
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                loop.run_until_complete(self.websocket_server.start())
+                try:
+                    loop.run_forever()
+                except asyncio.CancelledError:
+                    pass
+                finally:
+                    loop.run_until_complete(self.websocket_server.stop())
+                    loop.close()
+
+            self.websocket_server_thread = threading.Thread(
+                target=start_websocket_server,
+                name="WebSocket-Server",
+                daemon=True
+            )
+            self.websocket_server_thread.start()
+            log_info("MANAGER", "WebSocket 服务器线程已启动", indent=1)
+        else:
+            log_info("MANAGER", "WebSocket 服务器功能未启用", indent=1)
+
+        # 初始化音频采集模块（根据 system.websocket.enabled 自动选择）
+        # system.websocket.enabled = True -> Web麦克风
+        # system.websocket.enabled = False -> 本地麦克风
+        if self.microphone_type == "web":
+            # 使用 Web 麦克风
+            if not ws_enabled:
+                raise ValueError("Web 麦克风模式需要启用 WebSocket 服务器（system.websocket.enabled = true）")
+
+            log_info("MANAGER", "麦克风类型: Web麦克风（通过浏览器远程采集）", indent=1)
+
+            # 使用已启动的 WebSocket 服务器
+            from voice_chatbot.utils.microphone_web import WebMicrophoneServer
+            self.microphone = WebMicrophoneServer(
+                config=self.config,
+                ws_server=self.websocket_server,  # 复用已启动的服务器
+                on_audio_callback=self._on_audio_data  # 实时音频回调
+            )
+            log_info("MANAGER", "Web 麦克风模块初始化完成（复用 WebSocket 服务器）", indent=1)
+
+        else:
+            # 使用本地麦克风
+            log_info("MANAGER", "麦克风类型: 本地麦克风", indent=1)
+            from voice_chatbot.utils.microphone import MicrophoneRecorder
+            self.microphone = MicrophoneRecorder(
+                config=self.config,
+                on_audio_data_callback=self._on_audio_data
+            )
+            log_info("MANAGER", "音频采集模块初始化完成", indent=1)
         
         # 初始化VAD模块
         from voice_chatbot.asr.webrtc_vad import WebRTCVAD
@@ -445,17 +528,33 @@ class DialogueManager:
             log_info("MANAGER", f"TTS引擎初始化完成 ({tts_engine_type})", indent=1)
         
         # 初始化音频播放器
-        # 注意：AudioPlayer需要task_lock，但在v3.0架构中我们使用TaskContext
-        # 为了兼容，创建一个锁，但实际检查任务取消时使用get_current_task_id
+        # 根据播放器类型选择本地播放器或 Web 播放器
         import threading
         player_task_lock = threading.Lock()
-        self.audio_player = AudioPlayer(
-            config=self.config,
-            task_lock=player_task_lock,  # AudioPlayer内部需要锁
-            get_current_task_id=lambda: self.context_manager.get_current_task_id(),
-            event_bus=self.event_bus
-        )
-        log_info("MANAGER", "音频播放器初始化完成", indent=1)
+
+        if self.player_type == "web":
+            # Web 播放器模式
+            from voice_chatbot.utils.audio_player_web import AudioPlayerWeb, PlaybackStatus
+            self.PlaybackStatus = PlaybackStatus
+            self.audio_player = AudioPlayerWeb(
+                config=self.config,
+                ws_server=self.websocket_server,  # 复用现有的 WebSocket 服务器
+                task_lock=player_task_lock,
+                get_current_task_id=lambda: self.context_manager.get_current_task_id(),
+                event_bus=self.event_bus
+            )
+            log_info("MANAGER", "Web 音频播放器初始化完成", indent=1)
+        else:
+            # 本地播放器模式（默认）
+            from voice_chatbot.utils.audio_player import AudioPlayer, PlaybackStatus
+            self.PlaybackStatus = PlaybackStatus
+            self.audio_player = AudioPlayer(
+                config=self.config,
+                task_lock=player_task_lock,  # AudioPlayer内部需要锁
+                get_current_task_id=lambda: self.context_manager.get_current_task_id(),
+                event_bus=self.event_bus
+            )
+            log_info("MANAGER", "音频播放器初始化完成", indent=1)
         
         # 设置事件订阅
         self._setup_event_subscriptions()
@@ -498,6 +597,7 @@ class DialogueManager:
         # 启动音频采集线程（线程1，通过 ThreadManager）
         def audio_recorder_thread():
             """音频采集线程（线程1）"""
+            # 只有本地麦克风模式下才需要启动 microphone
             if self.microphone:
                 self.microphone.start()
                 # 持续运行，直到running=False
@@ -506,15 +606,23 @@ class DialogueManager:
                 while self.running:
                     time.sleep(0.05)  # 从0.1秒减少到0.05秒，更快响应
                 self.microphone.stop()
-        
-        self.thread_manager.start_thread(
-            name="Audio-Recorder",
-            target=audio_recorder_thread,
-            context=None,
-            thread_type="resident",
-            daemon=True
-        )
-        log_info("MANAGER", "音频采集线程已启动", indent=1)
+            # Web 麦克风模式下，服务器独立运行，只需要等待停止信号
+            else:
+                while self.running:
+                    time.sleep(0.05)
+
+        # 只有本地麦克风模式下才启动音频采集线程
+        if self.microphone:
+            self.thread_manager.start_thread(
+                name="Audio-Recorder",
+                target=audio_recorder_thread,
+                context=None,
+                thread_type="resident",
+                daemon=True
+            )
+            log_info("MANAGER", "音频采集线程已启动", indent=1)
+        else:
+            log_info("MANAGER", "Web麦克风模式，使用独立服务器线程", indent=1)
         
         # 启动VAD后台线程（线程2，通过 ThreadManager）
         if self.vad:
@@ -585,8 +693,22 @@ class DialogueManager:
         
         # 清理资源
         log_info("MANAGER", "清理资源", indent=1)
+        # 统一处理两种模式的麦克风清理
         if self.microphone:
-            self.microphone.stop()
+            if self.microphone_type == "local":
+                # 本地麦克风：调用 stop() 方法
+                self.microphone.stop()
+            elif self.microphone_type == "web":
+                # Web 麦克风：调用 stop() 方法（WebMicrophoneServer 也实现了 stop()）
+                import asyncio
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                try:
+                    loop.run_until_complete(self.microphone.stop())
+                except Exception as e:
+                    log_error("MANAGER", f"停止 Web 麦克风时出错: {e}", indent=1)
+                finally:
+                    loop.close()
         if self.audio_player:
             self.audio_player.cleanup()
         if self.tts_engine:
@@ -614,6 +736,34 @@ class DialogueManager:
         Args:
             audio_data: 音频数据（numpy数组，float32格式）
         """
+        # 计算音频统计信息（定期输出，避免日志过多）
+        if not hasattr(self, '_audio_log_counter'):
+            self._audio_log_counter = 0
+        self._audio_log_counter += 1
+        
+        # 每100次输出一次统计信息（约每2秒，假设每次约20ms）
+        if self._audio_log_counter % 100 == 0:
+            audio_length = len(audio_data)
+            sample_rate = self.config.get("audio.sample_rate", 16000)
+            duration = audio_length / sample_rate
+            rms = np.sqrt(np.mean(audio_data ** 2))
+            max_amp = np.max(np.abs(audio_data))
+            min_amp = np.min(np.abs(audio_data))
+            mean_amp = np.mean(np.abs(audio_data))
+            
+            # 获取预缓存状态
+            pre_buffer_info = ""
+            if self.asr and hasattr(self.asr, 'pre_buffer') and self.asr.pre_buffer:
+                pre_buffer_samples = len(self.asr.pre_buffer.get_all())
+                pre_buffer_duration = pre_buffer_samples / sample_rate
+                pre_buffer_info = f", 预缓存: {pre_buffer_samples}采样点({pre_buffer_duration:.2f}秒)"
+            
+            log_debug("MANAGER", 
+                     f"音频数据统计: 长度={audio_length}采样点({duration:.3f}秒), "
+                     f"RMS={rms:.4f}, 最大振幅={max_amp:.4f}, 最小振幅={min_amp:.4f}, "
+                     f"平均振幅={mean_amp:.4f}{pre_buffer_info}", 
+                     indent=2)
+        
         # 发送给VAD队列
         if self.vad:
             self.vad.feed_audio(audio_data)
@@ -635,7 +785,7 @@ class DialogueManager:
         # 检查NO_SPEECH_THRESHOLD，触发ASR停止
         if (self.last_active_time > 0 and 
             time.time() - self.last_active_time > self.no_speech_threshold):
-            log_debug("MANAGER", f"检查NO_SPEECH_THRESHOLD: last_active_time={self.last_active_time:.3f}, 距离上次活动={time.time() - self.last_active_time:.3f}秒, 阈值={self.no_speech_threshold}秒", indent=2)
+            # log_debug("MANAGER", f"检查NO_SPEECH_THRESHOLD: last_active_time={self.last_active_time:.3f}, 距离上次活动={time.time() - self.last_active_time:.3f}秒, 阈值={self.no_speech_threshold}秒", indent=2)
             # 检查ASR是否正在识别
             if self.asr:
                 if hasattr(self.asr, 'state_lock') and hasattr(self.asr, 'recognizing'):
@@ -811,7 +961,7 @@ class DialogueManager:
                     audio_status = self.audio_player.get_status()
                     audio_task_id = self.audio_player.get_current_task_id()
 
-                    if audio_task_id == current_task_id and audio_status == PlaybackStatus.PLAYING:
+                    if audio_task_id == current_task_id and audio_status == self.PlaybackStatus.PLAYING:
                         # 停止播放
                         self.audio_player.stop(task_id=current_task_id)
 
@@ -1804,8 +1954,8 @@ class DialogueManager:
                 # 副系统: SPEAKING → None
                 current_sub = self.state_manager.get_sub_state()
                 current_main = self.state_manager.get_main_state()
-                log_info("MANAGER", f"[STATE_TRANS-AUDIO_THREAD] Audio-Player线程结束，准备转换状态", indent=1)
-                log_info("MANAGER", f"[STATE_TRANS-AUDIO_THREAD] 当前状态: 主={current_main.value}, 副={current_sub.value}", indent=1)
+                log_info("MANAGER", f"[STATE_TRANS] Audio-Player线程结束，准备转换状态", indent=1)
+                log_info("MANAGER", f"[STATE_TRANS] 当前状态: 主={current_main.value}, 副={current_sub.value}", indent=1)
                 self.state_manager.transition_sub_state(
                     SubSystemState.NONE,
                     reason="播放完成"
@@ -1815,7 +1965,7 @@ class DialogueManager:
                     MainSystemState.IDLE,
                     reason="播放完成"
                 )
-                log_info("MANAGER", f"[STATE_TRANS-AUDIO_THREAD] 状态转换完成: 主={self.state_manager.get_main_state().value}, 副={self.state_manager.get_sub_state().value}", indent=1)
+                log_info("MANAGER", f"[STATE_TRANS] 状态转换完成: 主={self.state_manager.get_main_state().value}, 副={self.state_manager.get_sub_state().value}", indent=1)
                 
                 # 播放完成，输出换行以保持日志清晰（因为之前使用了inline模式）
                 print()  # 输出换行

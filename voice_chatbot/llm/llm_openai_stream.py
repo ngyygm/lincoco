@@ -806,19 +806,7 @@ class LLMStreamGenerator:
         messages = self._build_messages(user_input, images=images)
         
         # 输出messages内容（格式化显示）
-        log_info("LLM", "准备推理", indent=0)
-        log_info("LLM", f"Messages ({len(messages)}条):", indent=1)
-        
-        # 统计不同类型消息的数量
-        system_count = sum(1 for msg in messages if msg.get("role") == "system")
-        user_count = sum(1 for msg in messages if msg.get("role") == "user")
-        assistant_count = sum(1 for msg in messages if msg.get("role") == "assistant")
-        history_count = user_count + assistant_count - 1  # 减去当前用户输入
-        
-        if system_count > 0:
-            log_info("LLM", f"  System消息: {system_count}条", indent=2)
-        if history_count > 0:
-            log_info("LLM", f"  历史对话: {history_count}轮 ({assistant_count}条回答, {user_count-1}条用户输入)", indent=2)
+        log_debug("LLM", f"Messages ({len(messages)}条):", indent=1)
         
         # 输出每条消息的详细信息
         for i, msg in enumerate(messages):

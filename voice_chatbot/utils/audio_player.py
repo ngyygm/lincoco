@@ -530,9 +530,13 @@ class AudioPlayer:
                         if current_sentence_text and progress.get("progress_percent") is not None:
                             progress_percent = progress["progress_percent"]
                             # 根据播放进度百分比估算字符位置
-                            position = int(len(current_sentence_text) * progress_percent / 100)
-                            # 限制在有效范围内
-                            current_sentence_position = min(position, len(current_sentence_text))
+                            # 当进度接近100%时，确保显示完整文本
+                            if progress_percent >= 99.9:
+                                current_sentence_position = len(current_sentence_text)
+                            else:
+                                position = int(len(current_sentence_text) * progress_percent / 100) + 1
+                                # 限制在有效范围内
+                                current_sentence_position = min(position, len(current_sentence_text))
                         
                         # 创建并发送播放进度事件
                         # 延迟导入以避免循环导入
