@@ -209,6 +209,7 @@ class DialogueManager:
         self.history_lock = threading.Lock()
         
         # 打断相关变量
+        self.interrupt_lock = threading.Lock()  # 保护打断操作的锁
         self.interrupted_task_id = None  # 记录已经处理过真实打断的任务ID，避免重复打断
         
         # 线程启动标志（用于LLM+TTS流程）
@@ -824,46 +825,8 @@ class DialogueManager:
                 timeout=self.config.get("asr.result_timeout", 30.0)
             )
     
-    def _on_asr_partial_result(self, text, confidence=None):
-        """
-        ASR部分结果回调
-
-        实时检测打断：一旦识别到有效文本，立即确认真实打断
-        优化目标：不等用户说完话，只要识别出有效内容就立即打断
-        """
-        log_debug("MANAGER", f"部分识别结果: {text}", indent=0)
-
-        # 检查文本是否有效
-        is_valid_input = self._validate_input(text)
-            
-        if is_valid_input:
-
-            # 实时打断检测：检查是否有待确认的打断
-            with self.interrupt_lock:
-                if not self.pending_interrupt:
-                    # 已经清除了，不处理
-                    return
-                # 识别到有效文本，立即确认真实打断
-                log_info("MANAGER", f"✅ 实时打断检测：识别到有效文本 '{text}'，立即确认真实打断", indent=0)
-
-                # 立即清除pending_interrupt标志，防止后续部分结果重复处理
-                # 在锁内清除后立即返回，不会有时间差导致重复
-                self.pending_interrupt = False
-
-            # 在锁外调用_confirm_real_interrupt
-            try:
-                self._confirm_real_interrupt()
-            except Exception as e:
-                log_error("MANAGER", f"实时确认打断时发生错误: {e}", indent=0)
-                import traceback
-                log_error("MANAGER", f"异常堆栈: {traceback.format_exc()}", indent=0)
-                
-        else:
-            # 仍然是无效文本，继续等待
-            log_debug("MANAGER", f"部分结果无效（'{text}'），继续等待...", indent=1)
-            return
-
-            
+    # 注意：旧的_on_asr_partial_result回调方法已被事件处理版本替代
+    # 保留此方法仅用于向后兼容，实际使用事件处理版本（第1195行）
     
     def _on_asr_final_result(self, text):
         """ASR最终结果回调"""
@@ -936,66 +899,95 @@ class DialogueManager:
 
         注意：
         - full_played_text 在 _on_playback_progress 中实时计算并保存到 context
+        - 使用锁保护，避免连续打断时的竞争条件
         """
-        log_info("MANAGER", "确认真实打断，停止播放并处理新输入", indent=0)
+        # 使用锁保护打断操作，避免连续打断时的竞争条件
+        with self.interrupt_lock:
+            log_info("MANAGER", "确认真实打断，停止播放并处理新输入", indent=0)
 
-        try:
-            # 获取当前任务上下文
-            current_context = self.context_manager.get_current_context()
-            current_task_id = self.context_manager.get_current_task_id()
-            sub_state = self.state_manager.get_sub_state()
+            try:
+                # 获取当前任务上下文
+                current_context = self.context_manager.get_current_context()
+                current_task_id = self.context_manager.get_current_task_id()
+                sub_state = self.state_manager.get_sub_state()
 
-            # 记录已经处理过真实打断的任务ID，避免重复打断
-            self.interrupted_task_id = current_task_id
-            log_info("MANAGER", f"[INTERRUPT] 记录已打断任务ID: {current_task_id}，副系统状态: {sub_state.value}", indent=1)
-            
-            # 当前任务是否已经被打断过
-            current_context.set_extra_data("history_recorded_by_interrupt", True)
+                # 如果没有当前任务，可能是状态异常，尝试重置状态
+                if current_context is None:
+                    log_warn("MANAGER", "[INTERRUPT] 当前没有活动任务，但检测到打断，尝试重置状态", indent=1)
+                    if sub_state != SubSystemState.NONE:
+                        self.state_manager.transition_sub_state(SubSystemState.NONE, "打断时发现无活动任务，重置状态")
+                    # 重置打断标记，确保后续可以正常处理
+                    self.interrupted_task_id = None
+                    return
 
-            # 根据副系统状态处理
-            if sub_state == SubSystemState.SPEAKING:
-                # 正在播放：停止播放并保存已播放文本
-                log_info("MANAGER", f"[INTERRUPT] 副系统状态为SPEAKING，停止播放", indent=1)
+                # 检查当前任务是否已经被打断过，避免重复打断
+                if self.interrupted_task_id == current_task_id:
+                    log_info("MANAGER", f"[INTERRUPT] 任务{current_task_id}已处理过打断，跳过重复打断", indent=1)
+                    return
 
-                if self.audio_player:
-                    audio_status = self.audio_player.get_status()
-                    audio_task_id = self.audio_player.get_current_task_id()
+                # 记录已经处理过真实打断的任务ID，避免重复打断
+                self.interrupted_task_id = current_task_id
+                log_info("MANAGER", f"[INTERRUPT] 记录已打断任务ID: {current_task_id}，副系统状态: {sub_state.value}", indent=1)
+                
+                # 当前任务是否已经被打断过
+                if current_context.is_valid:
+                    current_context.set_extra_data("history_recorded_by_interrupt", True)
 
-                    if audio_task_id == current_task_id and audio_status == self.PlaybackStatus.PLAYING:
-                        # 停止播放
-                        self.audio_player.stop(task_id=current_task_id)
+                # 根据副系统状态处理
+                if sub_state == SubSystemState.SPEAKING:
+                    # 正在播放：停止播放并保存已播放文本
+                    log_info("MANAGER", f"[INTERRUPT] 副系统状态为SPEAKING，停止播放", indent=1)
 
-                        # 保存已播放文本到对话历史
-                        if current_context and current_context.is_valid:
-                            played_text = current_context.get_extra_data("full_played_text", "")
-                            if played_text:
-                                with self.history_lock:
-                                    played_text_trimmed = played_text.lstrip()
-                                    
-                                    log_info("LLM", f"_confirm_real_interrupt 记录到对话历史: {played_text_trimmed}", indent=0)
-                                    self.conversation_history.append({"role": "assistant", "content": played_text_trimmed})
-                                    self._limit_history_length()
-                                log_info("MANAGER", f"[INTERRUPT] 已保存已播放文本到历史，长度: {len(played_text_trimmed)}字符", indent=1)
+                    if self.audio_player:
+                        audio_status = self.audio_player.get_status()
+                        audio_task_id = self.audio_player.get_current_task_id()
 
-            elif sub_state == SubSystemState.PROCESSING:
-                # 正在处理（LLM生成或TTS生成）：取消任务，停止线程
-                log_info("MANAGER", f"[INTERRUPT] 副系统状态为PROCESSING，取消当前任务", indent=1)
+                        if audio_task_id == current_task_id and audio_status == self.PlaybackStatus.PLAYING:
+                            # 停止播放
+                            self.audio_player.stop(task_id=current_task_id)
 
-                # 取消当前任务（使上下文失效，线程会自动停止）
-                if current_context:
-                    self.context_manager.cancel_current_context()
-                    log_info("MANAGER", f"[INTERRUPT] 已取消上下文，LLM/TTS线程将自动停止", indent=1)
+                            # 保存已播放文本到对话历史
+                            if current_context and current_context.is_valid:
+                                played_text = current_context.get_extra_data("full_played_text", "")
+                                if played_text:
+                                    with self.history_lock:
+                                        played_text_trimmed = played_text.lstrip()
+                                        
+                                        log_info("LLM", f"_confirm_real_interrupt 记录到对话历史: {played_text_trimmed}", indent=0)
+                                        self.conversation_history.append({"role": "assistant", "content": played_text_trimmed})
+                                        self._limit_history_length()
+                                    log_info("MANAGER", f"[INTERRUPT] 已保存已播放文本到历史，长度: {len(played_text_trimmed)}字符", indent=1)
 
-            # 转换系统状态到NONE
-            if sub_state != SubSystemState.NONE:
-                log_info("MANAGER", f"[INTERRUPT] 从{sub_state.value}转换到NONE", indent=1)
-                self.state_manager.transition_sub_state(SubSystemState.NONE, "确认真实打断，准备处理新输入")
+                elif sub_state == SubSystemState.PROCESSING:
+                    # 正在处理（LLM生成或TTS生成）：取消任务，停止线程
+                    log_info("MANAGER", f"[INTERRUPT] 副系统状态为PROCESSING，取消当前任务", indent=1)
 
-        except Exception as e:
-            log_error("MANAGER", f"_confirm_real_interrupt() 发生异常: {e}", indent=0)
-            import traceback
-            log_error("MANAGER", f"异常堆栈:\n{traceback.format_exc()}", indent=0)
-            raise
+                    # 取消当前任务（使上下文失效，线程会自动停止）
+                    if current_context:
+                        self.context_manager.cancel_current_context()
+                        log_info("MANAGER", f"[INTERRUPT] 已取消上下文，LLM/TTS线程将自动停止", indent=1)
+                        
+                        # 重置线程启动标志，确保后续可以正常启动新任务
+                        self.tts_thread_started = False
+                        self._set_player_thread_started_safe(False)
+
+                # 转换系统状态到NONE
+                if sub_state != SubSystemState.NONE:
+                    log_info("MANAGER", f"[INTERRUPT] 从{sub_state.value}转换到NONE", indent=1)
+                    self.state_manager.transition_sub_state(SubSystemState.NONE, "确认真实打断，准备处理新输入")
+
+            except Exception as e:
+                log_error("MANAGER", f"_confirm_real_interrupt() 发生异常: {e}", indent=0)
+                import traceback
+                log_error("MANAGER", f"异常堆栈:\n{traceback.format_exc()}", indent=0)
+                # 发生异常时，尝试重置状态，确保系统可以继续工作
+                try:
+                    if sub_state != SubSystemState.NONE:
+                        self.state_manager.transition_sub_state(SubSystemState.NONE, "打断处理异常，重置状态")
+                    self.interrupted_task_id = None
+                except:
+                    pass
+                # 不重新抛出异常，避免影响后续处理
     
     def _handle_asr_result(self, text: str):
         """
@@ -1074,8 +1066,9 @@ class DialogueManager:
             log_info("MANAGER", f"[PERF_TIMER] 任务ID变化 ({old_task_id} -> {new_task_id})，重置性能计时器", indent=0)
             log_info("TIME", "任务ID变化，重置性能计时器", indent=1)
             self.performance_timer.reset()
-            # 重置打断标记，新任务可以被打破
-            self.interrupted_task_id = None
+            # 重置打断标记，新任务可以被打破（使用锁保护）
+            with self.interrupt_lock:
+                self.interrupted_task_id = None
             log_info("MANAGER", f"[INTERRUPT] 任务ID变化，重置打断标记，新任务{new_task_id}可以被打破", indent=1)
         
         # 转换状态
@@ -1213,16 +1206,29 @@ class DialogueManager:
         if partial_text:
             # 检查partial_text是否为有效输入（不在无效词列表中）
             if self._validate_input(partial_text):
-                # 获取当前任务ID
-                current_task_id = self.context_manager.get_current_task_id()
+                # 获取当前任务ID并检查是否需要打断（使用锁保护，避免竞争条件）
+                should_interrupt = False
+                current_task_id = None
+                with self.interrupt_lock:
+                    current_task_id = self.context_manager.get_current_task_id()
+                    
+                    # 检查当前task_id是否已经处理过真实打断，避免重复打断
+                    if self.interrupted_task_id != current_task_id:
+                        should_interrupt = True
+                        log_info("MANAGER", f"[有效识别] 检测到有效输入: '{partial_text}'，确认真实打断", indent=0)
+                    else:
+                        log_info("MANAGER", f"[有效识别] 检测到有效输入: '{partial_text}'，但任务{current_task_id}已处理过打断，跳过", indent=0)
                 
-                # 检查当前task_id是否已经处理过真实打断，避免重复打断
-                if self.interrupted_task_id != current_task_id:
-                    # 当partial_text不为空且不在invalid_recognition_words中时，唤起_confirm_real_interrupt进程
-                    log_info("MANAGER", f"[有效识别] 检测到有效输入: '{partial_text}'，确认真实打断", indent=0)
-                    self._confirm_real_interrupt()
-                else:
-                    log_info("MANAGER", f"[有效识别] 检测到有效输入: '{partial_text}'，但任务{current_task_id}已处理过打断，跳过", indent=0)
+                # 在锁外调用_confirm_real_interrupt，避免死锁
+                # 注意：_confirm_real_interrupt内部已经使用interrupt_lock保护
+                if should_interrupt:
+                    try:
+                        self._confirm_real_interrupt()
+                        log_info("MANAGER", f"[有效识别] 打断成功，任务{current_task_id}已标记为已打断", indent=1)
+                    except Exception as e:
+                        log_error("MANAGER", f"确认打断时发生错误: {e}", indent=0)
+                        import traceback
+                        log_error("MANAGER", f"异常堆栈: {traceback.format_exc()}", indent=0)
             
             # 使用inline模式输出实时识别结果（同一行更新）
             log_info("ASR", f"[识别中] {partial_text}", indent=0, inline=True)
