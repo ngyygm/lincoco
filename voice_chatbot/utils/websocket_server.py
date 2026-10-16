@@ -21,6 +21,25 @@ from datetime import datetime
 from typing import Optional, Dict, Callable, List
 import threading
 
+# 日志函数缓存（延迟导入，避免与 logger 模块产生导入顺序问题）
+_log_funcs = None
+
+
+def _ws_log(level: str, message: str):
+    """通过统一 logger 输出 WebSocket 服务器内部日志（替代裸 print）"""
+    global _log_funcs
+    if _log_funcs is None:
+        try:
+            from voice_chatbot.utils.logger import log_info, log_warn, log_error
+            _log_funcs = {"INFO": log_info, "WARN": log_warn, "ERROR": log_error}
+        except ImportError:
+            _log_funcs = {}
+    func = _log_funcs.get(level) or _log_funcs.get("INFO")
+    if func is not None:
+        func("WS", message, indent=0)
+    else:
+        print(f"[WebSocketServer] {message}")
+
 
 class WebSocketServer:
     """通用 WebSocket 服务端"""
@@ -68,8 +87,7 @@ class WebSocketServer:
         client_id = f"client_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}"
         client_addr = websocket.remote_address
 
-        # 直接打印（避免循环依赖）
-        print(f"[WebSocketServer] 客户端已连接: {client_addr} -> ID: {client_id}")
+        _ws_log("INFO", f"客户端已连接: {client_addr} -> ID: {client_id}")
 
         # 初始化客户端
         with self.lock:
@@ -100,18 +118,18 @@ class WebSocketServer:
                         await self._handle_text_message(client_id, message)
 
                 except Exception as e:
-                    print(f"[WebSocketServer] 处理客户端消息错误: {e}")
+                    _ws_log("ERROR", f"处理客户端消息错误: {e}")
 
         except websockets.exceptions.ConnectionClosed:
-            print(f"[WebSocketServer] 客户端断开连接: {client_id}")
+            _ws_log("INFO", f"客户端断开连接: {client_id}")
         except Exception as e:
-            print(f"[WebSocketServer] 处理客户端连接错误: {e}")
+            _ws_log("ERROR", f"处理客户端连接错误: {e}")
         finally:
             # 清理客户端
             with self.lock:
                 if client_id in self.clients:
                     del self.clients[client_id]
-            print(f"[WebSocketServer] 客户端已清理: {client_id}")
+            _ws_log("INFO", f"客户端已清理: {client_id}")
 
     async def _handle_binary_data(self, client_id: str, data: bytes):
         """处理二进制数据"""
@@ -124,7 +142,7 @@ class WebSocketServer:
                 else:
                     handler(client_id, data)
             except Exception as e:
-                print(f"[WebSocketServer] 二进制处理器错误: {e}")
+                _ws_log("ERROR", f"二进制处理器错误: {e}")
 
     async def _handle_text_message(self, client_id: str, message: str):
         """处理文本消息"""
@@ -141,10 +159,10 @@ class WebSocketServer:
                     else:
                         handler(client_id, data)
                 except Exception as e:
-                    print(f"[WebSocketServer] {msg_type} 消息处理器错误: {e}")
+                    _ws_log("ERROR", f"{msg_type} 消息处理器错误: {e}")
 
         except json.JSONDecodeError:
-            print(f"[WebSocketServer] 收到非 JSON 文本消息: {message}")
+            _ws_log("WARN", f"收到非 JSON 文本消息: {message}")
 
     def register_handler(self, message_type: str, callback: Callable):
         """
@@ -182,7 +200,7 @@ class WebSocketServer:
             await websocket.send(json.dumps(message))
             return True
         except Exception as e:
-            print(f"[WebSocketServer] 发送消息到客户端 {client_id} 失败: {e}")
+            _ws_log("WARN", f"发送消息到客户端 {client_id} 失败: {e}")
             return False
 
     async def send_to_all_clients(self, message: dict, exclude_client_ids: List[str] = None):
@@ -219,7 +237,7 @@ class WebSocketServer:
             await websocket.send(data)
             return True
         except Exception as e:
-            print(f"[WebSocketServer] 发送二进制数据到客户端 {client_id} 失败: {e}")
+            _ws_log("WARN", f"发送二进制数据到客户端 {client_id} 失败: {e}")
             return False
 
     def send_to_all_clients_sync(self, message: dict, exclude_client_ids: List[str] = None):
@@ -247,7 +265,9 @@ class WebSocketServer:
             pass
 
     def broadcast_log(self, level: str, category: str, message: str,
-                     timestamp: str = None, source: str = None, inline: bool = False):
+                     timestamp: str = None, source: str = None, inline: bool = False,
+                     stream: str = None, stream_action: str = None,
+                     stream_label: str = None, indent: int = 0):
         """
         广播日志消息到所有客户端
 
@@ -257,7 +277,11 @@ class WebSocketServer:
             message: 日志消息
             timestamp: 时间戳（可选，不提供则自动生成）
             source: 代码来源（可选）
-            inline: 是否为 inline 日志（流式更新）
+            inline: 是否为 inline 日志（流式更新，兼容旧协议）
+            stream: 流式通道名（如 play_text / asr_partial，同通道在网页端固定一行原地更新）
+            stream_action: 流式动作（"update"=更新中 / "end"=结束并落定）
+            stream_label: 流式标签（如 "播放文本" / "识别中"，网页端显示）
+            indent: 缩进级别（网页端按层级缩进）
         """
         if timestamp is None:
             timestamp = datetime.now().strftime("%H:%M:%S.%f")[:-3]
@@ -269,7 +293,11 @@ class WebSocketServer:
             "message": message,
             "timestamp": timestamp,
             "source": source,
-            "inline": inline  # 添加 inline 标记
+            "inline": inline,  # 兼容旧 inline 标记
+            "stream": stream,
+            "stream_action": stream_action,
+            "stream_label": stream_label,
+            "indent": indent
         }
 
         self.send_to_all_clients_sync(log_message)
@@ -282,8 +310,8 @@ class WebSocketServer:
         self.event_loop = asyncio.get_running_loop()
         self.event_loop_ready.set()  # 标记事件循环已就绪
 
-        print(f"[WebSocketServer] 启动 WebSocket 服务器: {self.host}:{self.port}")
-        print("[WebSocketServer] 等待客户端连接...")
+        _ws_log("INFO", f"启动 WebSocket 服务器: {self.host}:{self.port}")
+        _ws_log("INFO", "等待客户端连接...")
 
         # 启动 WebSocket 服务器
         self.server = await websockets.serve(
@@ -295,7 +323,7 @@ class WebSocketServer:
             max_size=10 * 1024 * 1024
         )
 
-        print(f"[WebSocketServer] 服务器已启动，监听 {self.host}:{self.port}")
+        _ws_log("INFO", f"服务器已启动，监听 {self.host}:{self.port}")
 
     async def stop(self):
         """停止服务器"""
@@ -323,7 +351,7 @@ class WebSocketServer:
             await self.server.wait_closed()
             self.server = None
 
-        print("[WebSocketServer] 服务器已停止")
+        _ws_log("INFO", "服务器已停止")
 
     def get_statistics(self) -> dict:
         """获取统计信息"""

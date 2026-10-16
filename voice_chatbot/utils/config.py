@@ -84,13 +84,24 @@ class Config:
             "no_speech_threshold": 0.4,  # 无语音阈值(秒),用户停止说话后等待多久才认为说话结束并触发ASR停止
                                        # 值越大越不容易误判(如换气时),但响应会变慢
                                        # 建议值:0.8-1.2秒,语速慢可设更大
+            "endpoint_debounce_ms": 500,  # 终句debounce窗口(毫秒),final结果后的静默等待时长(P3源头治理VAD过切分)
+                                        # 窗口内出现新的partial/final/VAD语音开始则重置计时并合并文本,
+                                        # 静默到期才用合并文本启动一轮LLM->TTS->播放;0=完全关闭(行为与旧版一致)
+                                        # 打断语义(机器人SPEAKING/已确认打断)下始终绕过,不影响打断延迟
 
             # ASR增强功能
             "enable_deduplication": False,  # 是否启用ASR流式去重,处理流式识别中的重复文本
 
             # ASR结果过滤配置
-            "invalid_recognition_words": ["", "i", "嗯", "啊", "呃", "哦", "额"],  # 无效识别词列表,会被过滤
+            "invalid_recognition_words": ["", "i", "嗯", "啊", "呃", "哦", "额",
+                                          "嗯哼", "嘻嘻", "呵呵", "嗯呐", "啊这",
+                                          "对对对", "好的好的", "好好好"],  # 无效识别词列表,会被过滤
                                                                        # 这些词会被认为是无效输入,不会触发对话处理
+                                                                       # (含单字语气词与枚举附和词,标点变体由归一化匹配覆盖)
+
+            # 无实义附和词字符集合(纯附和词过滤,如"嗯嗯""啊哦"全部由这些字符组成则判无效),
+            # 用于过滤VAD误触发/语气词识别结果
+            "backchannel_chars": "嗯啊哦呃额噢唉呀哈嘿诶欸唔",
 
             # --- 声纹锁配置 ---
             # 如果开启,ASR只对符合设定声纹的声音进行识别,提供安全保护
@@ -130,7 +141,16 @@ class Config:
             },
         },
 
-        # ====== 5. LLM大语言模型配置 ======
+        # ====== 5. 打断配置 ======
+        # 用户打断(barge-in)判定与误判恢复参数
+        "interrupt": {
+            "min_text_chars": 2,  # 真打断最小有效字符数(归一化后),单字应答如"对/好"不再触发打断
+            "min_confidence": 0.3,  # ASR部分结果最低置信度阈值(0.0-1.0),置信度缺失或<=0时放行(兼容不输出置信度的模型)
+            "cooldown_seconds": 1.0,  # 真打断跨任务冷却时间(秒),防止ASR抖动/重复识别引发打断风暴
+            "recover_on_misclassify": True,  # 误判恢复:确认打断后final结果无效时,恢复被暂停的播放(假打断继续播放)
+        },
+
+        # ====== 6. LLM大语言模型配置 ======
         # 核心功能,生成对话回复,支持多引擎和动态人设
         "llm": {
             # LLM基础参数
@@ -179,7 +199,7 @@ class Config:
             },
         },
 
-        # ====== 6. TTS语音合成配置 ======
+        # ====== 7. TTS语音合成配置 ======
         # 输出功能,将文本转换为语音,支持多引擎和性能优化
         "tts": {
             # TTS引擎选择
@@ -269,7 +289,7 @@ class Config:
             },
         },
 
-        # ====== 7. 日志配置 ======
+        # ====== 8. 日志配置 ======
         # 辅助功能,用于调试、监控和性能分析
         "logging": {
             # 文件日志
@@ -300,7 +320,7 @@ class Config:
                 "VAD": "CYAN",
                 "CTX": "BRIGHT_MAGENTA",
                 "THREAD": "BRIGHT_CYAN",
-                "MANAGER": "RED",
+                "MANAGER": "BRIGHT_YELLOW",
                 "PUN": "YELLOW+BOLD",
                 "PERSONA": "MAGENTA+BOLD",
                 "SPE": "CYAN+BOLD",
@@ -471,6 +491,7 @@ class Config:
         # 验证ASR参数
         assert self.config["asr"]["result_timeout"] > 0, "asr.result_timeout必须大于0"
         assert self.config["asr"]["no_speech_threshold"] > 0, "asr.no_speech_threshold必须大于0"
+        assert self.config["asr"]["endpoint_debounce_ms"] >= 0, "asr.endpoint_debounce_ms必须大于等于0"
 
         # 验证LLM参数
         assert self.config["llm"]["max_history_length"] > 0, "llm.max_history_length必须大于0"

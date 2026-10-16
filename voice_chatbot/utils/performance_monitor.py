@@ -12,6 +12,7 @@ from typing import Optional, List, Dict, Any
 from dataclasses import dataclass
 
 from voice_chatbot.dialogue.events import Event, EventType, EventFilter
+from voice_chatbot.utils.logger import log_error, console_exclusive
 
 
 # 启用Windows虚拟终端支持（用于ANSI转义码显示颜色）
@@ -170,7 +171,7 @@ class PerformanceMonitor:
                     self._handle_audio_play_end(timestamp)
                     
             except Exception as e:
-                print(f"[PERF] 处理性能事件错误: {e}")
+                log_error("TIME", f"处理性能事件错误: {e}")
     
     def _handle_vad_speech_start(self, timestamp: float):
         """处理VAD语音开始事件"""
@@ -263,7 +264,9 @@ class PerformanceMonitor:
     def calculate_and_output(self):
         """
         计算并输出响应耗时分析
-        
+
+        整块输出独占控制台（先闭合活动流式行），避免与日志/流式刷新交错
+
         使用树形结构展示6个关键时间节点和阶段耗时：
         T0: VAD语音结束
         T1: ASR结果就绪
@@ -272,6 +275,11 @@ class PerformanceMonitor:
         T4: TTS音频就绪
         T5: 开始播放
         """
+        with console_exclusive():
+            self._calculate_and_output_impl()
+
+    def _calculate_and_output_impl(self):
+        """响应耗时分析的实际计算与输出实现"""
         if not self.enable_output:
             return
         

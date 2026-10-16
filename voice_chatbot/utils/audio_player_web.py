@@ -22,7 +22,7 @@ import threading
 
 from pydub import AudioSegment
 
-from voice_chatbot.utils.logger import log_info, log_warn, log_error, log_debug
+from voice_chatbot.utils.logger import log_info, log_warn, log_error, log_debug, log_stream, log_stream_end
 from voice_chatbot.utils.websocket_server import WebSocketServer, get_websocket_server
 
 # 延迟导入 dialogue.events 以避免循环导入
@@ -593,12 +593,11 @@ class AudioPlayerWeb:
                         )
                         self.event_bus.publish(event)
 
-                        # 输出实时播放文本日志（同一行更新）
+                        # 输出实时播放文本日志（流式通道，同通道原地更新）
                         if current_sentence_text and current_sentence_position is not None:
                             played_text = current_sentence_text[:current_sentence_position]
                             if played_text and played_text != self._last_logged_text:
-                                # 使用inline=True在同一行更新
-                                log_info("PLAY", f"[播放文本] {played_text}", indent=1, inline=True)
+                                log_stream('play_text', played_text, label='播放文本', category='PLAY')
                                 self._last_logged_text = played_text
 
                         last_status_update_time = current_time
@@ -654,12 +653,12 @@ class AudioPlayerWeb:
                 elif not was_interrupted:
                     self._status = PlaybackStatus.IDLE
 
-            # 播放完成或中断时输出换行（如果使用了inline输出）
+            # 播放完成或中断时结束流式通道（需要在清理状态之前取最终文本）
             # 注意：需要在清理状态之前检查，因为_last_logged_text会被重置
-            need_newline = False
+            final_stream_text = ""
             with self._state_lock:
                 if self._last_logged_text:
-                    need_newline = True
+                    final_stream_text = self._last_logged_text
 
             # 发送播放完成消息到所有客户端
             complete_message = {
@@ -669,18 +668,18 @@ class AudioPlayerWeb:
             }
             self.ws_server.send_to_all_clients_sync(complete_message)
 
-            # 输出换行，结束流式输出
-            if need_newline:
-                print()  # 换行，结束流式输出
+            # 结束播放文本流式通道（控制台换行落定 + 网页端移除固定行）
+            # 正常完成时以完整句子为准（避免流式更新中的文本截断），中断时落定已播部分
+            final_text = final_stream_text
+            if not was_interrupted and current_sentence_text:
+                final_text = current_sentence_text
+            if final_text:
+                log_stream_end('play_text', final_text, label='播放文本', category='PLAY')
 
             play_elapsed = time.time() - play_start_time
             if was_interrupted:
                 log_warn("PLAY", f"播放中断 [耗时: {play_elapsed*1000:.1f}ms, 原因: {interrupt_reason.value}]", indent=1)
             else:
-                # 播放完成时，输出完整的当前句子文本（避免文本截断）
-                if current_sentence_text and self._last_logged_text != current_sentence_text:
-                    log_info("PLAY", f"[播放文本] {current_sentence_text}", indent=1, inline=False)
-                    self._last_logged_text = current_sentence_text
                 log_debug("PLAY", f"播放完成 [耗时: {play_elapsed*1000:.1f}ms]", indent=1)
 
             # 调用回调函数

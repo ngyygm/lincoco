@@ -320,17 +320,18 @@ class RAGManager(ABC):
 class LLMStreamGenerator:
     """LLM流式生成器（OpenAI API实现）"""
     
-    def __init__(self, config, conversation_history: List[dict], task_lock: threading.Lock, 
-                 get_current_task_id: Callable[[], int], 
+    def __init__(self, config, history_provider: Callable[[], List[dict]], task_lock: threading.Lock,
+                 get_current_task_id: Callable[[], int],
                  memory_manager: Optional[MemoryManager] = None,
                  rag_manager: Optional[RAGManager] = None,
                  persona_manager: Optional[PersonaManager] = None):
         """
         初始化LLM流式生成器
-        
+
         Args:
             config: 配置对象（Config实例）
-            conversation_history: 对话历史列表（会被修改）
+            history_provider: 历史快照提供函数（每次调用返回副本列表，已排除本轮
+                              当前输入；由 ConversationHistory.snapshot_for_llm 提供）
             task_lock: 任务锁
             get_current_task_id: 获取当前任务ID的函数
             memory_manager: 记忆管理器（可选）
@@ -338,7 +339,7 @@ class LLMStreamGenerator:
             persona_manager: 人设管理器（可选，如果不提供则创建新实例）
         """
         self.config = config
-        self.conversation_history = conversation_history
+        self.history_provider = history_provider
         self.task_lock = task_lock
         self.get_current_task_id = get_current_task_id
         self.memory_manager = memory_manager
@@ -688,6 +689,31 @@ class LLMStreamGenerator:
             log_error("LLM", f"图像编码失败: {e}", indent=1)
             raise
     
+    @staticmethod
+    def _sanitize_history(history: List[dict]) -> List[dict]:
+        """
+        清洗对话历史，修复打断残留的脏上下文：
+        - 空消息 → 丢弃
+        - 连续多条assistant（打断残留的部分回复 + 新回复）→ 只保留最后一条
+
+        注意：连续user的同句合并职责已归 ConversationHistory.record_user，
+        此处不再处理（recorder判定为两次独立输入而追加的连续user，按独立消息保留）
+
+        返回新列表，不修改传入的历史对象
+        """
+        result: List[dict] = []
+        for msg in history:
+            role = msg.get("role")
+            content = (msg.get("content") or "").strip()
+            if not content:
+                continue
+            if result and result[-1].get("role") == role and role != "user":
+                # 连续assistant：只保留最后一条（前面的多为被打断的残留）
+                result[-1] = {"role": role, "content": content}
+                continue
+            result.append({"role": role, "content": content})
+        return result
+
     def _build_messages(self, user_input: str, images: Optional[List[str]] = None) -> List[dict]:
         """
         构建OpenAI API的messages格式
@@ -732,15 +758,15 @@ class LLMStreamGenerator:
             except Exception as e:
                 log_warn("LLM", f"记忆检索失败: {e}", indent=1)
         
-        # 添加历史对话
-        with self.task_lock:
-            messages.extend(self.conversation_history.copy())
-            messages = messages[:-1]  # 删除最后一条历史记录（当前用户输入）
+        # 添加历史对话（清洗后）
+        # 当前输入的排除已在 provider 侧完成（snapshot_for_llm 按 dict 对象身份排除
+        # "待定当前输入"，天然抗合并竞态），此处直接清洗使用，不再做 [:-1] 防御性截断
+        messages.extend(self._sanitize_history(self.history_provider()))
         
         # 构建用户消息
+        # 关闭思考模式改为请求参数 chat_template_kwargs.enable_thinking=False（Qwen3/Qwen3.5 官方机制，见下方 create 调用），
+        # 不再把 " /no_think" 拼进消息文本——Qwen3.5 会把它当普通文字读进回复内容里
         user_content = user_input
-        if not self.if_thinking:
-            user_content += " /no_think"
         
         # 如果有多模态内容（图像）
         if images:
@@ -1007,6 +1033,14 @@ class LLMStreamGenerator:
         max_retries = self.config.get("llm.max_retries", 3)
         retry_delay = self.config.get("llm.retry_delay", 1.0)
         request_timeout = self.config.get("llm.request_timeout", 30.0)
+
+        # 关闭思考模式的请求参数（Qwen3/Qwen3.5 通用；vLLM 原生支持）
+        extra_request_kwargs = {}
+        if not self.if_thinking:
+            if self.use_new_api:
+                extra_request_kwargs = {"extra_body": {"chat_template_kwargs": {"enable_thinking": False}}}
+            else:
+                extra_request_kwargs = {"chat_template_kwargs": {"enable_thinking": False}}
         
         # 重试循环（只对API调用失败重试，流式传输过程中的错误不重试）
         last_error = None
@@ -1022,7 +1056,8 @@ class LLMStreamGenerator:
                         max_tokens=self.max_tokens,
                         temperature=self.temperature,
                         stream=True,
-                        timeout=request_timeout
+                        timeout=request_timeout,
+                        **extra_request_kwargs
                     )
                 else:
                     # 使用旧版本API
@@ -1032,7 +1067,8 @@ class LLMStreamGenerator:
                         max_tokens=self.max_tokens,
                         temperature=self.temperature,
                         stream=True,
-                        timeout=request_timeout
+                        timeout=request_timeout,
+                        **extra_request_kwargs
                     )
                 
                 # API调用成功，跳出重试循环

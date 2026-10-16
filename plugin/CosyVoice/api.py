@@ -488,7 +488,7 @@ def main():
     
     global cosyvoice, default_data
     try:
-        cosyvoice = CosyVoice2(args.model_dir,load_jit=False, load_trt=True, fp16=True, use_flow_cache=False)
+        cosyvoice = CosyVoice2(args.model_dir,load_jit=False, load_trt=False, fp16=True, use_flow_cache=False)
     except Exception as e:
         import traceback
         error_msg = f"模型初始化失败: {str(e)}\n"

@@ -4,7 +4,7 @@
 提供日志系统、时间记录、配置管理、性能监控、音频播放、麦克风采集等功能
 """
 
-from .logger import Logger, Colors, get_timestamp, get_thread_id, get_thread_name, log_info, log_warn, log_error, log_debug, log_with_timestamp, init_logger, update_logger_filter, update_logger_category_colors
+from .logger import Logger, Colors, get_timestamp, get_thread_id, get_thread_name, log_info, log_warn, log_error, log_debug, log_with_timestamp, log_stream, log_stream_end, console_exclusive, init_logger, update_logger_filter, update_logger_category_colors
 from .timer import PerformanceTimer, Timer
 from .config import Config
 from .audio_player import AudioPlayer, PlaybackStatus, InterruptReason
@@ -25,6 +25,9 @@ __all__ = [
     'log_error',
     'log_debug',
     'log_with_timestamp',
+    'log_stream',
+    'log_stream_end',
+    'console_exclusive',
     'init_logger',
     'update_logger_filter',
     'update_logger_category_colors',

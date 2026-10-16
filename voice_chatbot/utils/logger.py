@@ -9,6 +9,7 @@ import os
 import sys
 import threading
 import inspect
+from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 import re
@@ -127,6 +128,62 @@ def _strip_ansi_codes(text):
     return ansi_escape.sub('', text)
 
 
+# ============================================================================
+# 控制台统一出口与流式通道
+# ============================================================================
+# 所有控制台输出（普通日志、流式行、inline 行）共用一把模块级锁，
+# 避免多线程 print 交错导致半行断裂、"一个字换一行"的混乱输出。
+_console_lock = threading.RLock()
+
+# 当前占用控制台"未闭合行"的流式通道（None 表示当前行已闭合）。
+# 普通日志输出前必须先闭合流式行；流式通道再次更新时若无未闭合行则另起一行。
+_active_stream_channel = None
+
+# 旧 inline=True 日志映射到的通道名（兼容保留，见 Logger.log）
+_INLINE_CHANNEL = "__inline__"
+
+# 级别标签配色（只染 [LEVEL] 标签，不整行染色；INFO 用默认色保持清爽）
+LEVEL_TAG_COLORS = {
+    'INFO': None,
+    'DEBUG': Colors.BRIGHT_BLACK,
+    'WARN': Colors.YELLOW,
+    'ERROR': Colors.RED + Colors.BOLD,
+}
+
+# 类别默认配色表（config 的 logging.category_colors 可覆盖同名项并追加新类别）
+DEFAULT_CATEGORY_COLORS = {
+    'ASR': 'GREEN',
+    'TTS': 'BLUE',
+    'LLM': 'YELLOW',
+    'PLAY': 'MAGENTA',
+    'VAD': 'CYAN',
+    'CTX': 'BRIGHT_MAGENTA',
+    'THREAD': 'BRIGHT_CYAN',
+    'PUN': 'YELLOW+BOLD',
+    'PERSONA': 'MAGENTA+BOLD',
+    'SPE': 'CYAN+BOLD',
+    'EVENT': 'BRIGHT_CYAN+BOLD',
+    'TIME': 'BRIGHT_GREEN',
+    'TASK': 'BRIGHT_YELLOW',
+    'WS': 'BRIGHT_BLUE',
+    'NET': 'BRIGHT_BLUE',
+    'MAIN': 'BRIGHT_WHITE',
+}
+
+
+def _ansi(code):
+    """返回可用的 ANSI 颜色代码（不支持 ANSI 的控制台返回空串）"""
+    return code if (_ansi_enabled or sys.platform != 'win32') else ''
+
+
+def _close_active_stream_line():
+    """闭合控制台上未结束的流式行（必须在持有 _console_lock 时调用）"""
+    global _active_stream_channel
+    if _active_stream_channel is not None:
+        print()  # 换行收尾
+        _active_stream_channel = None
+
+
 def _parse_color_name(color_name):
     """
     解析颜色名称字符串，返回对应的 ANSI 颜色代码
@@ -203,11 +260,14 @@ def get_thread_id():
 
 
 def get_thread_name():
-    """获取当前线程名称"""
+    """获取当前线程名称（去掉默认后缀的函数信息，保持简短）"""
     name = threading.current_thread().name
     if not name or name == "MainThread":
         return "Main"
-    return name[:10]  # 限制长度
+    # 默认线程名形如 "Thread-1 (spam)"，去掉括号部分避免截断后残留
+    if "(" in name:
+        name = name.split("(", 1)[0].strip()
+    return name[:12] or "T"
 
 
 def get_caller_source():
@@ -280,8 +340,12 @@ class Logger:
         self.filtered_levels = set(level.upper() for level in (filtered_levels or []))
         self.filtered_categories = set(category.upper() for category in (filtered_categories or []))
         
-        # 类别专属颜色配置（将颜色名称转换为 ANSI 代码）
+        # 类别专属颜色配置：内置默认表打底，config 传入的同名项覆盖、新类别追加
         self.category_colors = {}
+        for category, color_name in DEFAULT_CATEGORY_COLORS.items():
+            color_code = _parse_color_name(color_name)
+            if color_code:
+                self.category_colors[category.upper()] = color_code
         if category_colors:
             for category, color_name in category_colors.items():
                 color_code = _parse_color_name(color_name)
@@ -392,36 +456,51 @@ class Logger:
 
         log_message = f"[{timestamp}]{thread_info} [{level_str}] [{category_str}] {source_str}{indent_str}{message}"
 
-        # 确定使用的颜色：优先使用传入的 color 参数，否则使用 category 专属颜色，最后使用默认颜色
-        final_color = None
+        # 配色策略：只染标签，不整行染色——
+        #   时间戳/线程/来源 用暗色（BRIGHT_BLACK）降低视觉噪音
+        #   [LEVEL] 标签按级别配色（INFO 默认色保持清爽）
+        #   [CATEGORY] 标签按类别配色（color 参数优先，其次类别专属色）
+        #   正文使用终端默认色
+        reset = _ansi(Colors.RESET)
+        dim = _ansi(Colors.BRIGHT_BLACK)
+        level_upper = level.upper()
+        level_color = _ansi(LEVEL_TAG_COLORS.get(level_upper) or '')
+
+        category_color = ''
         if color is not None:
-            # 如果传入了 color 参数，使用传入的颜色
-            final_color = color
+            category_color = color
         elif category:
-            # 检查 category 是否有专属颜色
-            category_upper = category.upper()
-            if category_upper in self.category_colors:
-                final_color = self.category_colors[category_upper]
+            category_color = self.category_colors.get(category.upper(), '')
 
-        # 应用颜色代码
-        if final_color is not None:
-            colored_message = f"{final_color}{log_message}{Colors.RESET}"
-        else:
-            colored_message = log_message
+        head_seg = f"{dim}[{timestamp}]{thread_info}{reset}"
+        level_seg = f"{_ansi(level_color)}[{level_str}]{reset}"
+        cat_seg = f"{_ansi(category_color)}[{category_str}]{reset}"
+        colored_message = f"{head_seg} {level_seg} {cat_seg} "
+        if source_str:
+            colored_message += f"{dim}{source_str}{reset}"
+        colored_message += f"{indent_str}{message}"
 
-        # 输出到控制台
+        # 输出到控制台（统一走 _console_lock，与流式行互斥，避免交错断行）
         # 确保 ANSI 支持已启用（特别是在 Windows 上）
         if sys.platform == 'win32' and not _ansi_enabled:
             _enable_windows_ansi()
 
-        if inline:
-            # 同一行更新（使用\r，不换行）
-            print(f"\r{colored_message}", end='', flush=True)
-        else:
-            print(colored_message, flush=True)
+        global _active_stream_channel
+        with _console_lock:
+            if inline:
+                # 同一行流式更新（使用\r，不换行）：兼容旧 inline 语义，
+                # 映射到专用通道，普通日志输出前会自动闭合该行
+                if _active_stream_channel != _INLINE_CHANNEL:
+                    _close_active_stream_line()
+                    _active_stream_channel = _INLINE_CHANNEL
+                print(f"\r{colored_message}", end='', flush=True)
+            else:
+                # 普通日志：先闭合未结束的流式行，再输出完整行
+                _close_active_stream_line()
+                print(colored_message, flush=True)
 
-        # 输出到文件
-        if self.log_file_enabled:
+        # 输出到文件（流式 inline 更新不写文件，避免刷屏；最终文本走普通日志落盘）
+        if self.log_file_enabled and not inline:
             with self._lock:
                 self._update_log_file()  # 检查是否需要切换日志文件
                 if self.log_file_handle:
@@ -431,7 +510,7 @@ class Logger:
                     self.log_file_handle.flush()
 
         # 广播到 Web 端（如果 WebSocket 服务器已设置）
-        # 注意：inline 日志也会广播到 Web 端，但 Web 端是逐行显示的，不会有控制台的 \r 效果
+        # 注意：inline 日志也会广播到 Web 端，Web 端将流式消息渲染到固定状态条而非日志流
         with _websocket_server_lock:
             if _websocket_server:
                 try:
@@ -440,19 +519,13 @@ class Logger:
                         category=category,
                         message=message,
                         timestamp=timestamp,
-                        source=source if source else (get_caller_source() if self.show_source else None),
-                        inline=inline  # 传递 inline 标记，Web 端可以根据需要处理
+                        source=source,
+                        inline=inline,  # 传递 inline 标记（旧流式消息兼容）
+                        indent=indent   # 缩进级别，Web 端按层级渲染
                     )
-                except Exception as e:
+                except Exception:
                     # 避免日志广播失败影响主流程
-                    # 可以取消注释下面这行来调试广播错误
-                    # print(f"广播日志失败: {e}")
                     pass
-            else:
-                # WebSocket 服务器未设置，无法广播
-                # 可以取消注释下面这行来调试
-                # print(f"警告：WebSocket 服务器未设置，无法广播日志 [{level}][{category}]")
-                pass
     
     def info(self, category, message, indent=0, show_thread=True, inline=False, color=None, source=None):
         """信息日志"""
@@ -615,6 +688,134 @@ def log_error(category, message, indent=0, show_thread=True, color=None, source=
 def log_debug(category, message, indent=0, show_thread=True, color=None, source=None):
     """调试日志（全局函数）"""
     _get_global_logger().debug(category, message, indent, show_thread, color, source)
+
+
+# ============================================================================
+# 流式通道 API（显式的"开始更新/结束"语义，替代 inline=True 的裸 \r 刷新）
+#
+# 用法：
+#   log_stream('asr_partial', '今天天气', label='识别中', category='ASR')
+#   log_stream_end('asr_partial', '今天天气怎么样', label='识别中', category='ASR')
+#
+# 控制台：通道独占一行用 \r 原地刷新；期间插入的普通日志会先闭合该行，
+#         通道下次更新时另起一行（有锁保证，不会出现半行交错）。
+# Web 端：更新消息刷新固定状态徽标（不进入日志流）；end 消息移除徽标，
+#         并将最终文本作为一条普通日志落定（不被后续日志冲掉）。
+# ============================================================================
+
+def _broadcast_stream(channel, action, text, label, category, timestamp, indent):
+    """广播流式通道消息到 Web 端"""
+    with _websocket_server_lock:
+        if _websocket_server:
+            try:
+                _websocket_server.broadcast_log(
+                    level="INFO",
+                    category=category or "",
+                    message=text,
+                    timestamp=timestamp,
+                    source=None,
+                    inline=(action == "update"),  # 旧 Web 端兼容标记
+                    indent=indent,
+                    stream=channel,
+                    stream_action=action,
+                    stream_label=label,
+                )
+            except Exception:
+                pass
+
+
+def _render_stream_line(label, text, indent, category_color):
+    """构建流式行的着色文本（轻量格式：[时间] ▸ 标签 正文）"""
+    reset = _ansi(Colors.RESET)
+    dim = _ansi(Colors.BRIGHT_BLACK)
+    timestamp = get_timestamp()
+    return (
+        f"{dim}[{timestamp}]{reset} "
+        f"{_ansi(category_color)}{label} ▸{reset} "
+        f"{'  ' * indent}{text}"
+    )
+
+
+@contextmanager
+def console_exclusive():
+    """
+    独占控制台输出（用于整块格式化输出，如性能分析报告）
+
+    持有控制台锁并先闭合活动流式行，保证整块输出不与日志/流式刷新交错
+    """
+    with _console_lock:
+        _close_active_stream_line()
+        yield
+
+
+def log_stream(channel, text, label=None, category=None, indent=1):
+    """
+    流式输出更新
+
+    Args:
+        channel: 通道标识（同一通道原地刷新，如 'asr_partial' / 'play_text'）
+        text: 当前流式文本（增量全量均可，Web 端直接替换显示）
+        label: 显示标签（如 '识别中'），默认使用 channel
+        category: 日志类别（决定标签颜色与过滤）
+        indent: 缩进级别
+    """
+    logger = _get_global_logger()
+    label = label or channel
+    category_upper = (category or "").upper()
+    category_color = logger.category_colors.get(category_upper, '')
+
+    # 控制台：类别被过滤则不渲染（Web 端仍可收到广播）
+    if logger._should_log("INFO", category or ""):
+        global _active_stream_channel
+        with _console_lock:
+            line = _render_stream_line(label, text, indent, category_color)
+            if _active_stream_channel != channel:
+                # 通道没有未闭合行（首次更新或被其他日志顶掉）：先闭合当前行再另起
+                _close_active_stream_line()
+                _active_stream_channel = channel
+            print(f"\r{line}", end='', flush=True)
+
+    _broadcast_stream(channel, "update", text, label, category, get_timestamp(), indent)
+
+
+def log_stream_end(channel, final_text=None, label=None, category=None, indent=1):
+    """
+    结束流式通道
+
+    Args:
+        final_text: 最终完整文本（控制台闭合前刷新为该文本；Web 端落定为日志行）
+    """
+    global _active_stream_channel
+    logger = _get_global_logger()
+    label = label or channel
+    category_upper = (category or "").upper()
+    category_color = logger.category_colors.get(category_upper, '')
+
+    with _console_lock:
+        if _active_stream_channel == channel:
+            # 通道持有未闭合行：刷新为最终文本后换行收尾
+            if final_text:
+                line = _render_stream_line(label, final_text, indent, category_color)
+                print(f"\r{line}", end='', flush=True)
+            print()
+            _active_stream_channel = None
+        elif final_text and logger._should_log("INFO", category or ""):
+            # 通道行已被中间日志顶掉（或从未开始）：以完整日志行输出最终结果
+            line = _render_stream_line(label, final_text, indent, category_color)
+            print(line, flush=True)
+
+    # 最终文本落盘（流式中间更新不写文件，只写最终结果）
+    if final_text and logger.log_file_enabled:
+        with logger._lock:
+            logger._update_log_file()
+            if logger.log_file_handle:
+                clean = f"[{get_timestamp()}] [{(category or '').ljust(6)}] {'  ' * indent}{label}: {final_text}"
+                logger.log_file_handle.write(_strip_ansi_codes(clean) + '\n')
+                logger.log_file_handle.flush()
+
+    # end 消息始终广播（即使控制台被过滤），确保 Web 端状态徽标被移除；
+    # 最终文本随 end 消息携带，Web 端据此落定为一条暗色收尾日志行
+    _broadcast_stream(channel, "end", final_text or "", label, category, get_timestamp(), indent)
 
 
 def log_with_timestamp(message):

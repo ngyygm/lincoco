@@ -5,6 +5,7 @@
 """
 
 from .state import DialogueState, SystemState, MainSystemState, SubSystemState, TaskInfo
+from .conversation_history import ConversationHistory
 from .state_manager import StateManager
 from .events import EventType, Event, EventFilter, EventBus, create_event, get_default_priority
 from .task_context import TaskContext, TaskCancelledException
@@ -21,6 +22,8 @@ __all__ = [
     'MainSystemState',
     'SubSystemState',
     'TaskInfo',
+    # 对话历史记录器（P1 结构收敛：历史单一所有者）
+    'ConversationHistory',
     # 状态管理器（v3.0 新架构）
     'StateManager',
     # 事件系统

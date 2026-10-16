@@ -819,7 +819,7 @@ class FunASRStream:
                                 encoder_chunk_look_back=self.encoder_chunk_look_back,
                                 decoder_chunk_look_back=self.decoder_chunk_look_back
                             )
-                            
+
                             if res and len(res) > 0:
                                 new_text = res[0].get('text', '').strip()
                                 if new_text:

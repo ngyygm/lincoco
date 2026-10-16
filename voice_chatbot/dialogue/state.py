@@ -1,14 +1,14 @@
 """
 状态机模块
 
-提供状态枚举、任务信息管理、对话历史管理、线程安全的状态操作、状态转换日志和状态持久化
+提供状态枚举、任务信息管理、线程安全的状态操作、状态转换日志和状态持久化
+（对话历史管理已收敛至 conversation_history.ConversationHistory）
 参考：56_Lincoco_streamASR_openai_edgetts_realTime.py
 """
 
 import threading
 import time
 import json
-import re
 from enum import Enum
 from typing import List, Dict, Optional, Any
 from dataclasses import dataclass, field
@@ -69,10 +69,7 @@ class DialogueState:
             config: 配置对象（Config实例）
         """
         self.config = config
-        
-        # 从配置获取参数
-        self.max_history_length = config.get("llm.max_history_length", 50)  # 最大历史记录长度（对话轮数）
-        
+
         # 状态管理（主系统和副系统）
         self._main_state = MainSystemState.IDLE
         self._sub_state = SubSystemState.NONE
@@ -82,11 +79,7 @@ class DialogueState:
         self._current_task_id = 0
         self._current_task: Optional[TaskInfo] = None
         self._task_history: List[TaskInfo] = []  # 任务历史记录（可选）
-        
-        # 对话历史管理
-        self._conversation_history: List[Dict[str, str]] = []
-        self._history_lock = threading.Lock()
-        
+
         # 状态转换历史（用于日志和调试）
         self._state_transition_history: List[Dict[str, Any]] = []
         self._max_transition_history = 100  # 最多保存100条转换记录
@@ -303,91 +296,13 @@ class DialogueState:
     def get_current_task(self) -> Optional[TaskInfo]:
         """
         获取当前任务信息
-        
+
         Returns:
             当前任务信息，如果没有则返回None
         """
         with self._state_lock:
             return self._current_task
-    
-    def add_conversation(self, user_input: str, response: str, 
-                        is_interrupted: bool = False, play_duration: float = 0.0):
-        """
-        添加对话到历史
-        
-        Args:
-            user_input: 用户输入
-            response: 回答文本
-            is_interrupted: 是否被打断
-            play_duration: 播放时长（秒），用于判断是否记录
-        """
-        with self._history_lock:
-            # 播放了多少就记录多少，不再检查播放时长阈值
-            
-            # 去除前导空白字符（包括换行符、空格等）
-            response_trimmed = response.lstrip()
-            
-            # 如果被打断，检查是否需要添加"..."标记
-            # 如果响应文本以句子结束符结尾（完整句子），则不需要添加"..."
-            if is_interrupted:
-                # 检查是否以句子结束符结尾（。！？.!?\n）
-                sentence_end_pattern = r'[。！？.!?\n]+$'
-                if re.search(sentence_end_pattern, response_trimmed.strip()):
-                    # 以完整句子结尾，不需要添加"..."
-                    response_with_mark = response_trimmed
-                else:
-                    # 不是完整句子，添加"..."标记
-                    response_with_mark = response_trimmed + "..."
-            else:
-                response_with_mark = response_trimmed
-            
-            # 添加到历史
-            if response_with_mark:
-                self._conversation_history.append({"role": "assistant", "content": response_with_mark})
-                
-                # 限制历史记录长度（max_history_length是对话轮数，每轮包含用户和助手两条消息）
-                max_messages = self.max_history_length * 2
-                if len(self._conversation_history) > max_messages:
-                    # 删除最旧的记录，保持历史记录长度不超过限制
-                    removed_count = len(self._conversation_history) - max_messages
-                    self._conversation_history = self._conversation_history[removed_count:]
-                    log_debug("HIST", f"历史记录超过最大长度({self.max_history_length}轮)，已删除最旧的{removed_count}条记录，当前历史记录数: {len(self._conversation_history)}", indent=1)
-                
-                if is_interrupted:
-                    log_info("HIST", f"打断 - 用户: {user_input}", indent=1)
-                    log_info("HIST", f"打断 - 回答({len(response)}字,播放{play_duration:.1f}秒): {response}", indent=1)
-                else:
-                    log_info("HIST", f"完成 - 用户: {user_input}", indent=1)
-                    log_info("HIST", f"完成 - 回答: {response_with_mark}", indent=1)
-    
-    def get_conversation_history(self) -> List[Dict[str, str]]:
-        """
-        获取对话历史
-        
-        Returns:
-            对话历史列表（副本）
-        """
-        with self._history_lock:
-            return self._conversation_history.copy()
-    
-    def get_conversation_history_ref(self) -> List[Dict[str, str]]:
-        """
-        获取对话历史的引用（用于需要直接修改的场景）
-        
-        注意：返回的是原始列表的引用，调用者可以直接修改
-        但修改时需要注意线程安全
-        
-        Returns:
-            对话历史列表（引用）
-        """
-        return self._conversation_history
-    
-    def clear_conversation_history(self):
-        """清空对话历史"""
-        with self._history_lock:
-            self._conversation_history.clear()
-            log_info("HIST", "对话历史已清空", indent=0)
-    
+
     def get_state_transition_history(self, limit: Optional[int] = None) -> List[Dict[str, Any]]:
         """
         获取状态转换历史
@@ -417,9 +332,6 @@ class DialogueState:
             self._state_transition_history.clear()
             
             log_info("STATE", f"状态已重置: 主系统 {old_main_state.value} → IDLE, 副系统 {old_sub_state.value} → none", indent=0)
-        
-        with self._history_lock:
-            self._conversation_history.clear()
-        
+
         log_info("STATE", "所有状态已重置", indent=0)
 
